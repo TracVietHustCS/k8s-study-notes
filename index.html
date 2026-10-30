@@ -676,6 +676,75 @@ spec:
 </ul>
 </article>
 
+<article class="page" data-id="obj-batch" data-group="Đối tượng cốt lõi" data-title="Job, CronJob và DaemonSet" hidden>
+<h1>Job, CronJob và DaemonSet</h1>
+<p class="lead">Không phải mọi workload đều là dịch vụ chạy mãi. Job chạy một việc đến khi xong, CronJob chạy theo lịch, DaemonSet chạy một bản trên mỗi node.</p>
+<h2>Chọn đúng loại workload</h2>
+<div class="tw"><table><tr><th>Loại</th><th>Chạy thế nào</th><th>Ví dụ</th></tr><tr><td>Deployment</td><td>N replica giống nhau, không có danh tính cố định</td><td>Web, API</td></tr><tr><td>StatefulSet</td><td>N replica có danh tính và volume riêng, theo thứ tự</td><td>Database, hàng đợi (xem <a href="#storage-stateful">StatefulSet</a>)</td></tr><tr><td>DaemonSet</td><td>Một Pod trên mỗi node (hoặc tập node được chọn)</td><td>Agent log, node-exporter, plugin CNI/CSI</td></tr><tr><td>Job</td><td>Chạy đến khi hoàn thành thành công</td><td>Migration, xử lý batch, sao lưu một lần</td></tr><tr><td>CronJob</td><td>Tạo Job theo lịch</td><td>Backup hằng đêm, dọn dẹp, báo cáo</td></tr></table></div>
+<h2>Job</h2>
+<pre><code>apiVersion: batch/v1
+kind: Job
+metadata: {name: migrate}
+spec:
+  backoffLimit: 3                    # thử lại tối đa 3 lần rồi đánh dấu Failed
+  activeDeadlineSeconds: 600         # quá 10 phút thì dừng
+  ttlSecondsAfterFinished: 3600      # tự xóa Job sau 1 giờ kể từ khi xong
+  template:
+    spec:
+      restartPolicy: Never           # Job chỉ dùng Never hoặc OnFailure
+      containers:
+        - name: migrate
+          image: registry.example.com/app:1.4.2
+          command: ["./migrate", "--up"]</code></pre>
+<ul><li><code>restartPolicy</code> của Job phải là <code>Never</code> hoặc <code>OnFailure</code> (không phải <code>Always</code>). Với <code>Never</code>, mỗi lần lỗi tạo một Pod mới (dễ xem log từng lần); với <code>OnFailure</code>, container được restart trong cùng Pod.</li><li><code>completions</code> và <code>parallelism</code> điều khiển việc chạy nhiều Pod: ví dụ <code>completions: 10, parallelism: 3</code> chạy 10 phần việc, tối đa 3 Pod cùng lúc. Với <code>completionMode: Indexed</code>, mỗi Pod nhận một chỉ số (biến môi trường <code>JOB_COMPLETION_INDEX</code>) để biết mình xử lý phần nào.</li><li>Đặt <code>ttlSecondsAfterFinished</code>, nếu không Job và Pod đã xong ở lại mãi (chiếm chỗ trong etcd và làm danh sách <code>kubectl get</code> dài).</li><li>Ứng dụng của Job phải <b>idempotent</b>: vì có thể bị chạy lại sau lỗi, chạy hai lần không được gây hậu quả sai.</li></ul>
+<h2>CronJob</h2>
+<pre><code>apiVersion: batch/v1
+kind: CronJob
+metadata: {name: nightly-backup}
+spec:
+  schedule: "30 2 * * *"             # 02:30 mỗi ngày (cú pháp cron 5 trường)
+  timeZone: "Asia/Ho_Chi_Minh"       # nếu không đặt, dùng múi giờ của kube-controller-manager
+  concurrencyPolicy: Forbid          # không chạy chồng lên lần trước
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: registry.example.com/backup:2.0</code></pre>
+<div class="tw"><table><tr><th>Trường</th><th>Ý nghĩa</th></tr><tr><td><code>concurrencyPolicy</code></td><td><code>Allow</code> (mặc định, cho chạy chồng), <code>Forbid</code> (bỏ qua lần mới nếu lần cũ chưa xong), <code>Replace</code> (hủy lần cũ chạy lần mới)</td></tr><tr><td><code>startingDeadlineSeconds</code></td><td>Trễ quá bao lâu thì bỏ lần chạy đó (do controller tắt, cluster bận)</td></tr><tr><td><code>timeZone</code></td><td>Múi giờ của lịch; cần bản Kubernetes có hỗ trợ trường này</td></tr><tr><td><code>suspend</code></td><td><code>true</code> để tạm dừng lịch mà không xóa CronJob</td></tr><tr><td><code>successfulJobsHistoryLimit</code>, <code>failedJobsHistoryLimit</code></td><td>Số Job đã xong giữ lại để xem log</td></tr></table></div>
+<div class="callout warn"><b>Những điểm hay quên</b><ul><li>Nếu <b>không đặt <code>timeZone</code></b>, lịch tính theo múi giờ của kube-controller-manager (thường UTC), không phải giờ địa phương của bạn.</li><li>Controller có thể bỏ lỡ một lần chạy nếu cluster bận hoặc controller khởi động lại; nếu lỡ quá nhiều lần liên tiếp, CronJob có thể ngừng lên lịch cho tới khi bạn can thiệp. Với việc quan trọng (backup), đặt cảnh báo khi <b>lần chạy thành công gần nhất</b> quá cũ.</li><li><code>concurrencyPolicy: Allow</code> với tác vụ chạy lâu hơn chu kỳ sẽ chồng chất nhiều Job và có thể tự làm sập cluster.</li></ul></div>
+<pre><code>kubectl create job --from=cronjob/nightly-backup test-run     # chạy thử ngay
+kubectl get jobs; kubectl logs job/test-run
+kubectl patch cronjob nightly-backup -p '{"spec":{"suspend":true}}'</code></pre>
+<h2>DaemonSet</h2>
+<p>DaemonSet bảo đảm mỗi node (khớp điều kiện) có đúng một Pod. Node mới tham gia cluster thì tự có Pod, node bị gỡ thì Pod bị dọn.</p>
+<pre><code>apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: node-agent, namespace: monitoring}
+spec:
+  selector: {matchLabels: {app: node-agent}}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 1}
+  template:
+    metadata: {labels: {app: node-agent}}
+    spec:
+      tolerations:
+        - {operator: Exists}             # chạy cả trên node có taint (control plane, node sandbox...)
+      containers:
+        - name: agent
+          image: registry.example.com/node-agent:1.0
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}</code></pre>
+<ul><li>Chỉ chạy trên một số node: dùng <code>nodeSelector</code> hoặc <code>affinity</code> trong <code>template.spec</code>.</li><li>DaemonSet <b>không tự chạy trên node có taint</b> nếu không có toleration tương ứng: lỗi hay gặp khi agent log "thiếu" ở control plane hoặc node chuyên dụng. Ngược lại, tolerate mọi thứ nghĩa là agent chạy cả nơi bạn không muốn.</li><li>Agent chạy trên <b>mọi node</b> nên <code>requests</code> của nó nhân với số node: đặt cho hợp lý.</li><li>Cập nhật mặc định theo kiểu <code>RollingUpdate</code>, từng node một (<code>maxUnavailable</code>); kiểm tra bằng <code>kubectl rollout status ds/node-agent</code>.</li></ul>
+</article>
+
 <!-- ============ SERVICES ============ -->
 <article class="page" data-id="services" data-group="Mạng" data-title="Service và DNS" hidden>
 <h1>Service và DNS</h1>
@@ -932,6 +1001,54 @@ spec:
 </ul>
 </article>
 
+<article class="page" data-id="storage-stateful" data-group="Cấu hình và lưu trữ" data-title="StatefulSet và chạy database trên Kubernetes" hidden>
+<h1>StatefulSet và chạy database trên Kubernetes</h1>
+<p class="lead">StatefulSet là workload dành cho ứng dụng cần danh tính và dữ liệu ổn định. Hiểu nó giúp bạn chọn đúng giữa tự chạy database trên cluster và dùng dịch vụ có người quản lý.</p>
+<h2>StatefulSet bảo đảm gì</h2>
+<p>So với Deployment, StatefulSet cho ba thứ:</p>
+<ol><li><b>Danh tính ổn định</b>: Pod có tên theo thứ tự <code>db-0</code>, <code>db-1</code>, <code>db-2</code>, và giữ nguyên tên khi bị tạo lại.</li><li><b>Volume riêng, bền</b>: mỗi Pod có PVC riêng từ <code>volumeClaimTemplates</code>, và PVC đó được gắn lại cho đúng Pod khi nó chạy lại.</li><li><b>Thứ tự</b>: tạo <code>db-0</code> trước, chờ nó Ready rồi mới tạo <code>db-1</code>; xóa theo thứ tự ngược lại (đổi được bằng <code>podManagementPolicy: Parallel</code>).</li></ol>
+<p>Để mỗi Pod có DNS ổn định, cần một <b>headless Service</b> (<code>clusterIP: None</code>): khi đó <code>db-0.db.NAMESPACE.svc.cluster.local</code> trỏ thẳng tới Pod <code>db-0</code>.</p>
+<pre><code>apiVersion: v1
+kind: Service
+metadata: {name: db}
+spec:
+  clusterIP: None                     # headless
+  selector: {app: db}
+  ports: [{name: pg, port: 5432}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: db}
+spec:
+  serviceName: db                     # tên headless Service
+  replicas: 3
+  selector: {matchLabels: {app: db}}
+  template:
+    metadata: {labels: {app: db}}
+    spec:
+      containers:
+        - name: db
+          image: registry.example.com/db:1.0
+          volumeMounts: [{name: data, mountPath: /var/lib/db}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: fast
+        resources: {requests: {storage: 50Gi}}</code></pre>
+<h2>Hành vi cần biết</h2>
+<ul><li><b>PVC không bị xóa tự động</b> khi bạn xóa StatefulSet hoặc giảm replica (mặc định). Việc này an toàn cho dữ liệu nhưng để lại PVC mồ côi chiếm dung lượng. Các bản mới có trường <code>persistentVolumeClaimRetentionPolicy</code> để chọn giữ hay xóa, hãy kiểm tra theo phiên bản.</li><li><b>Cập nhật có kiểm soát</b>: <code>updateStrategy.rollingUpdate.partition: 2</code> chỉ cập nhật các Pod có chỉ số từ 2 trở lên, hữu ích để thử bản mới trên một replica (canary) trước. <code>OnDelete</code> chỉ cập nhật khi bạn tự xóa Pod.</li><li><b>Kẹt vì thứ tự</b>: với <code>OrderedReady</code>, nếu <code>db-1</code> không bao giờ Ready thì <code>db-2</code> không được tạo, và một bản cập nhật hỏng có thể dừng ở giữa chừng. Cần sửa Pod hỏng (không chỉ đợi).</li><li><b>Pod chết cùng node</b>: K8s không tự "xóa cưỡng bức" Pod StatefulSet trên node mất liên lạc, vì có thể node chỉ mất mạng chứ chưa chết và Pod vẫn đang ghi, gây hai bản cùng ghi. Đây là chủ ý. Chỉ <code>--force --grace-period=0</code> khi chắc chắn node đã tắt hẳn.</li><li><b>Volume gắn theo zone</b>: PV trên block storage thường nằm trong một zone nhất định, nên Pod chỉ chạy lại được ở node cùng zone. Dùng StorageClass với <code>volumeBindingMode: WaitForFirstConsumer</code> để volume được tạo ở zone nơi Pod được xếp lịch. Xem <a href="#storage">PV và PVC</a>.</li></ul>
+<h2>Khi nào nên tự chạy database trên Kubernetes</h2>
+<div class="tw"><table><tr><th>Tình huống</th><th>Gợi ý</th></tr><tr><td>Đội ít kinh nghiệm vận hành database, dữ liệu quan trọng</td><td>Ưu tiên dịch vụ do nhà cung cấp quản lý (ví dụ RDS trên AWS) nếu được</td></tr><tr><td>Môi trường on-prem, cần chạy trong cluster</td><td>Dùng <b>operator</b> của database, không tự viết StatefulSet thô</td></tr><tr><td>Dev, test, dữ liệu có thể tạo lại</td><td>Chạy trong cluster là hợp lý và tiết kiệm</td></tr><tr><td>Công cụ vốn thiết kế phân tán và có operator chuẩn (Elasticsearch, Kafka)</td><td>Thường chạy tốt với operator (ECK, Strimzi)</td></tr><tr><td>Cần hiệu năng I/O rất cao và ổn định</td><td>Cân nhắc kỹ loại storage (local hay mạng), đo trước khi quyết định</td></tr></table></div>
+<p>Một operator cho database lo những việc StatefulSet thô không làm: bầu chọn primary, failover, replica, backup và khôi phục theo thời điểm, nâng cấp phiên bản có kiểm soát. Ví dụ các dự án: CloudNativePG hoặc các operator PostgreSQL khác, operator của Percona cho MySQL/MongoDB, Strimzi cho Kafka, ECK cho Elasticsearch (xem <a href="#tool-eck">ECK</a>). Tên dự án nêu theo trí nhớ, hãy kiểm tra dự án còn được duy trì và hỗ trợ phiên bản bạn cần.</p>
+<div class="callout tip"><b>Checklist trước khi chạy database trong cluster</b><ul><li>Đã <b>thử khôi phục</b> từ backup chưa, và biết mất bao lâu (RTO)?</li><li>Replica nằm trên các node và zone khác nhau (anti-affinity hoặc topology spread), có PodDisruptionBudget chưa?</li><li><code>requests</code> và <code>limits.memory</code> đặt hợp lý: bị OOM kill giữa lúc ghi là rủi ro hỏng dữ liệu?</li><li>StorageClass có <code>allowVolumeExpansion</code>, và <code>reclaimPolicy</code> phù hợp (xóa nhầm PVC có mất dữ liệu không)?</li><li>Có giám sát độ trễ replication, dung lượng đĩa và cảnh báo trước khi đầy?</li></ul></div>
+<pre><code>kubectl get sts,pod,pvc -l app=db
+kubectl describe sts db
+kubectl exec -it db-0 -- sh
+kubectl rollout status sts/db
+kubectl rollout undo sts/db</code></pre>
+</article>
+
 <!-- ============ SCHEDULING ============ -->
 <article class="page" data-id="scheduling" data-group="Vận hành" data-title="Scheduling" hidden>
 <h1>Điều khiển việc xếp Pod lên Node</h1>
@@ -1005,6 +1122,102 @@ kubectl drain node1 --ignore-daemonsets --delete-emptydir-data
 kubectl uncordon node1</code></pre>
 </article>
 
+<article class="page" data-id="ops-resources" data-group="Vận hành" data-title="Tài nguyên: requests, limits, QoS và quota" hidden>
+<h1>Tài nguyên: requests, limits, QoS và quota</h1>
+<p class="lead">Đặt requests và limits là việc nhỏ nhưng ảnh hưởng tới mọi thứ: Pod được xếp ở đâu, bị làm chậm hay bị giết, và bị đuổi đầu tiên khi node thiếu tài nguyên.</p>
+<h2>requests và limits làm gì</h2>
+<pre><code>resources:
+  requests: {cpu: 250m, memory: 256Mi}     # mức "đặt chỗ"
+  limits:   {memory: 256Mi}                # trần</code></pre>
+<ul><li><b>requests</b>: lượng tài nguyên Pod xin để được xếp lịch. Scheduler chỉ đặt Pod lên node còn đủ chỗ (theo <b>tổng requests</b>, không theo mức dùng thực). Với CPU, requests còn quyết định phần chia khi nhiều Pod tranh nhau.</li><li><b>limits</b>: trần mà container không được vượt.</li><li>Đơn vị: CPU tính theo core (<code>1</code> = 1 core, <code>250m</code> = 0,25 core); bộ nhớ theo byte (<code>256Mi</code>, <code>2Gi</code>; chú ý <code>M</code> khác <code>Mi</code>).</li></ul>
+<p>CPU và bộ nhớ vượt trần cho hậu quả khác nhau, vì kernel xử lý khác nhau:</p>
+<div class="tw"><table><tr><th></th><th>CPU</th><th>Bộ nhớ</th></tr><tr><td>Bản chất</td><td><b>Nén được</b>: có thể làm chậm</td><td><b>Không nén được</b>: không thể "lấy lại"</td></tr><tr><td>Vượt limit</td><td>Bị <b>throttle</b> (làm chậm)</td><td>Bị <b>OOM kill</b> (exit code 137, <code>OOMKilled</code>)</td></tr><tr><td>Cơ chế cgroup</td><td><code>cpu.max</code></td><td><code>memory.max</code></td></tr></table></div>
+<h2>Quan hệ với cgroup</h2>
+<p>Kubernetes không tự giới hạn gì: nó dịch cấu hình thành cgroup để kernel thực thi. Xem thêm trang <a href="https://tracviethustcs.github.io/linux-network-notes/#os-cgroup" target="_blank" rel="noopener">cgroups v2 trong site Linux</a>.</p>
+<svg class="dg" viewBox="0 0 760 294" role="img" aria-label="Cách cấu hình tài nguyên của Pod ánh xạ sang hành vi của Kubernetes và cgroup: requests.cpu dùng để xếp lịch và chia CPU qua cpu.weight, limits.cpu bị throttle qua cpu.max, requests.memory dùng để xếp lịch và QoS, limits.memory bị OOM kill qua memory.max">
+  <defs><marker id="ar-rl" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--blue)"/></marker></defs>
+  <text x="135" y="24" text-anchor="middle" class="zt">Trong Pod spec</text>
+  <text x="400" y="24" text-anchor="middle" class="zt">Kubernetes xử lý</text>
+  <text x="645" y="24" text-anchor="middle" class="zt">Kernel (cgroup v2)</text>
+  <rect class="box" x="20" y="40" width="230" height="44" rx="6"/>
+  <text x="135.0" y="66.5" text-anchor="middle">requests.cpu</text>
+  <rect class="box" x="285" y="40" width="230" height="44" rx="6"/>
+  <text x="400.0" y="58.0" text-anchor="middle">Xếp lịch Pod lên node;</text>
+  <text x="400.0" y="75.0" text-anchor="middle">chia CPU khi tranh chấp</text>
+  <rect class="tipbox" x="550" y="40" width="190" height="44" rx="6"/>
+  <text x="645.0" y="66.5" text-anchor="middle">cpu.weight</text>
+  <line class="ln" x1="250" y1="62" x2="285" y2="62" marker-end="url(#ar-rl)"/>
+  <line class="ln" x1="515" y1="62" x2="550" y2="62" marker-end="url(#ar-rl)"/>
+  <rect class="box" x="20" y="94" width="230" height="44" rx="6"/>
+  <text x="135.0" y="120.5" text-anchor="middle">limits.cpu</text>
+  <rect class="warnbox" x="285" y="94" width="230" height="44" rx="6"/>
+  <text x="400.0" y="112.0" text-anchor="middle">Vượt trần: bị throttle</text>
+  <text x="400.0" y="129.0" text-anchor="middle">(làm chậm, không bị giết)</text>
+  <rect class="tipbox" x="550" y="94" width="190" height="44" rx="6"/>
+  <text x="645.0" y="120.5" text-anchor="middle">cpu.max</text>
+  <line class="ln" x1="250" y1="116" x2="285" y2="116" marker-end="url(#ar-rl)"/>
+  <line class="ln" x1="515" y1="116" x2="550" y2="116" marker-end="url(#ar-rl)"/>
+  <rect class="box" x="20" y="148" width="230" height="44" rx="6"/>
+  <text x="135.0" y="174.5" text-anchor="middle">requests.memory</text>
+  <rect class="box" x="285" y="148" width="230" height="44" rx="6"/>
+  <text x="400.0" y="166.0" text-anchor="middle">Xếp lịch Pod; xác định QoS</text>
+  <text x="400.0" y="183.0" text-anchor="middle">và thứ tự bị evict</text>
+  <rect class="box" x="550" y="148" width="190" height="44" rx="6"/>
+  <text x="645.0" y="174.5" text-anchor="middle">không có trần cứng</text>
+  <line class="ln" x1="250" y1="170" x2="285" y2="170" marker-end="url(#ar-rl)"/>
+  <line class="ln" x1="515" y1="170" x2="550" y2="170" marker-end="url(#ar-rl)"/>
+  <rect class="box" x="20" y="202" width="230" height="44" rx="6"/>
+  <text x="135.0" y="228.5" text-anchor="middle">limits.memory</text>
+  <rect class="warnbox" x="285" y="202" width="230" height="44" rx="6"/>
+  <text x="400.0" y="220.0" text-anchor="middle">Vượt trần: OOM kill</text>
+  <text x="400.0" y="237.0" text-anchor="middle">exit 137, OOMKilled</text>
+  <rect class="tipbox" x="550" y="202" width="190" height="44" rx="6"/>
+  <text x="645.0" y="228.5" text-anchor="middle">memory.max</text>
+  <line class="ln" x1="250" y1="224" x2="285" y2="224" marker-end="url(#ar-rl)"/>
+  <line class="ln" x1="515" y1="224" x2="550" y2="224" marker-end="url(#ar-rl)"/>
+  <text x="380" y="272" text-anchor="middle" class="sm">Cam: hậu quả khi vượt. Xanh lá: cơ chế kernel thực thi. Chi tiết cgroup xem site Linux, trang cgroups v2.</text>
+</svg>
+
+<h2>QoS class</h2>
+<p>Kubernetes tự gán mỗi Pod một lớp <b>QoS</b> dựa trên cách bạn đặt tài nguyên:</p>
+<div class="tw"><table><tr><th>Lớp</th><th>Điều kiện</th><th>Khi node thiếu tài nguyên</th></tr><tr><td><b>Guaranteed</b></td><td>Mọi container đều có <code>requests</code> và <code>limits</code> cho cả CPU và bộ nhớ, và <code>requests</code> bằng <code>limits</code></td><td>Bị đuổi sau cùng</td></tr><tr><td><b>Burstable</b></td><td>Có ít nhất một <code>requests</code> hoặc <code>limits</code> nhưng không đủ điều kiện Guaranteed</td><td>Ở giữa</td></tr><tr><td><b>BestEffort</b></td><td>Không đặt <code>requests</code> lẫn <code>limits</code></td><td>Bị đuổi trước</td></tr></table></div>
+<p>Khi node thiếu bộ nhớ hay đĩa, kubelet <b>evict</b> Pod: ưu tiên những Pod đang dùng <b>vượt requests</b>, rồi tới <code>PriorityClass</code>, rồi tới mức vượt. Khi hết RAM hẳn, kernel OOM killer chọn tiến trình dựa trên <code>oom_score_adj</code> mà kubelet đặt theo lớp QoS (Guaranteed rất thấp, khoảng -997; BestEffort cao nhất, 1000; Burstable ở giữa). Xem lớp của một Pod:</p>
+<pre><code>kubectl get pod POD -o jsonpath='{.status.qosClass}'</code></pre>
+<h2>Node có bao nhiêu chỗ</h2>
+<p>Tổng tài nguyên của node không phải toàn bộ dành cho Pod. <b>Allocatable</b> = dung lượng − phần dành cho hệ điều hành (<code>system-reserved</code>) − phần dành cho kubelet và runtime (<code>kube-reserved</code>) − ngưỡng evict. Scheduler xếp Pod theo allocatable.</p>
+<pre><code>kubectl describe node NODE          # mục "Allocatable" và "Allocated resources"
+kubectl top node
+kubectl top pod -A --sort-by=memory</code></pre>
+<p><code>kubectl top</code> cần metrics-server. Lưu ý "Allocated resources" tính theo <b>requests</b>: node có thể báo "đã cấp 95% CPU" trong khi CPU thực tế rảnh, vì requests đặt quá cao. Đó là lý do nhiều Pod <code>Pending</code> với thông báo <code>Insufficient cpu</code> dù cluster trông rảnh.</p>
+<h2>Quota và LimitRange</h2>
+<p>Hai đối tượng cấp namespace để kiểm soát việc dùng chung:</p>
+<pre><code>apiVersion: v1
+kind: ResourceQuota
+metadata: {name: team-a, namespace: team-a}
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.memory: 60Gi
+    pods: "100"
+---
+apiVersion: v1
+kind: LimitRange
+metadata: {name: defaults, namespace: team-a}
+spec:
+  limits:
+    - type: Container
+      defaultRequest: {cpu: 100m, memory: 128Mi}   # gán nếu Pod không khai báo requests
+      default: {memory: 256Mi}                      # gán nếu Pod không khai báo limits
+      max: {cpu: "2", memory: 2Gi}                  # trần cho một container</code></pre>
+<ul><li><b>ResourceQuota</b>: tổng cho cả namespace (tổng requests, limits, số Pod, số PVC...). Vượt quota thì tạo Pod bị từ chối.</li><li><b>LimitRange</b>: mặc định và min/max cho <b>từng container</b>.</li><li>Khi namespace có quota theo <code>requests</code> hoặc <code>limits</code>, mọi Pod bắt buộc phải khai báo giá trị đó, nếu không bị từ chối: LimitRange với giá trị mặc định giúp việc này bớt phiền.</li></ul>
+<h2>Đặt giá trị bao nhiêu</h2>
+<p>Không có công thức chung, nhưng một cách làm phổ biến:</p>
+<ol><li><b>Đo trước</b>: xem mức dùng thực trong vài ngày (Prometheus, <code>kubectl top</code>, VPA ở chế độ khuyến nghị, Goldilocks, xem <a href="#tool-observe">Giám sát và add-on</a>).</li><li><b>Bộ nhớ</b>: đặt <code>requests</code> bằng mức dùng điển hình và <code>limits</code> bằng <code>requests</code> hoặc cao hơn một chút có đệm (ví dụ 10 đến 30%). Bộ nhớ vượt trần là bị giết, nên đệm quan trọng hơn là tiết kiệm. Với JVM, đặt heap thấp hơn limit vì còn bộ nhớ ngoài heap.</li><li><b>CPU</b>: <code>requests</code> theo mức dùng điển hình. Nhiều đội <b>không đặt CPU limit</b> (hoặc đặt rất rộng) vì limit gây throttle ngay cả khi CPU của node đang rảnh, làm độ trễ tăng đột biến; đổi lại cần quota và <code>requests</code> chuẩn để node không bị ép. Đây là cách làm có tranh luận, nên đo ảnh hưởng của throttle trên ứng dụng của bạn trước khi quyết.</li><li>Đặt lại giá trị định kỳ khi tải thay đổi.</li></ol>
+<p>Chỉ số để phát hiện throttle: <code>container_cpu_cfs_throttled_periods_total</code> chia cho <code>container_cpu_cfs_periods_total</code> (từ cAdvisor, có trong Prometheus).</p>
+<div class="tw"><table><tr><th>Triệu chứng</th><th>Nguyên nhân thường gặp</th></tr><tr><td><code>OOMKilled</code>, exit code 137</td><td>Vượt <code>limits.memory</code></td></tr><tr><td>Ứng dụng chậm bất thường dù CPU node rảnh</td><td>CPU bị throttle do <code>limits.cpu</code> thấp</td></tr><tr><td>Pod <code>Pending</code>, <code>Insufficient cpu</code> hoặc <code>memory</code></td><td><code>requests</code> quá cao so với allocatable còn lại</td></tr><tr><td>Pod <code>Evicted</code></td><td>Node thiếu bộ nhớ hoặc đĩa, Pod vượt requests hoặc là BestEffort</td></tr><tr><td>Tạo Pod bị từ chối <code>exceeded quota</code></td><td>Namespace hết ResourceQuota</td></tr></table></div>
+</article>
+
 <!-- ============ AUTOSCALING ============ -->
 <article class="page" data-id="autoscaling" data-group="Vận hành" data-title="Autoscaling" hidden>
 <h1>Autoscaling</h1>
@@ -1042,6 +1255,126 @@ kubectl get hpa -w</code></pre>
 <li>Thường tích hợp với node group của cloud.</li>
 </ul>
 <div class="callout tip"><b>Mẹo</b><p>KEDA mở rộng HPA để scale theo sự kiện (độ dài queue, lag Kafka…) và có thể scale về 0.</p></div>
+</article>
+
+<article class="page" data-id="ops-probes" data-group="Vận hành" data-title="Probe, tắt êm và PodDisruptionBudget" hidden>
+<h1>Probe, tắt êm và PodDisruptionBudget</h1>
+<p class="lead">Làm sao Kubernetes biết một Pod còn sống, đã sẵn sàng nhận traffic chưa, và làm sao tắt Pod mà không làm rớt request. Ba chủ đề này quyết định việc deploy có "êm" hay không.</p>
+<h2>Ba loại probe</h2>
+<div class="tw"><table><tr><th>Probe</th><th>Câu hỏi</th><th>Khi thất bại</th><th>Dùng cho</th></tr><tr><td>liveness</td><td>Container còn hoạt động đúng không?</td><td>kubelet <b>restart</b> container</td><td>Phát hiện deadlock, treo không tự hồi phục</td></tr><tr><td>readiness</td><td>Đã sẵn sàng nhận traffic chưa?</td><td>Pod bị <b>gỡ khỏi endpoints</b> của Service, không restart</td><td>Đang khởi động, đang nạp dữ liệu, quá tải tạm thời</td></tr><tr><td>startup</td><td>Ứng dụng đã khởi động xong chưa?</td><td>Restart nếu vượt <code>failureThreshold</code>; trong lúc chạy, liveness và readiness chưa được kiểm tra</td><td>Ứng dụng khởi động chậm (JVM, chạy migration)</td></tr></table></div>
+<p>Mỗi probe kiểm tra theo một trong bốn cách: <code>httpGet</code> (mã 2xx hoặc 3xx là đạt), <code>tcpSocket</code> (kết nối được là đạt), <code>exec</code> (chạy lệnh trong container, thoát mã 0 là đạt), <code>grpc</code> (giao thức health check của gRPC).</p>
+<pre><code>containers:
+  - name: web
+    image: registry.example.com/web:1.4.2
+    ports: [{containerPort: 8080}]
+    startupProbe:
+      httpGet: {path: /healthz, port: 8080}
+      periodSeconds: 5
+      failureThreshold: 30        # tối đa 30 x 5s = 150 giây để khởi động
+    readinessProbe:
+      httpGet: {path: /ready, port: 8080}
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+    livenessProbe:
+      httpGet: {path: /healthz, port: 8080}
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3</code></pre>
+<div class="tw"><table><tr><th>Tham số</th><th>Mặc định</th><th>Ý nghĩa</th></tr><tr><td><code>initialDelaySeconds</code></td><td>0</td><td>Chờ bao lâu sau khi container chạy rồi mới bắt đầu kiểm tra</td></tr><tr><td><code>periodSeconds</code></td><td>10</td><td>Chu kỳ kiểm tra</td></tr><tr><td><code>timeoutSeconds</code></td><td>1</td><td>Quá thời gian này tính là thất bại</td></tr><tr><td><code>failureThreshold</code></td><td>3</td><td>Số lần thất bại liên tiếp để coi là hỏng</td></tr><tr><td><code>successThreshold</code></td><td>1</td><td>Số lần thành công liên tiếp để coi là đạt trở lại (liveness và startup bắt buộc là 1)</td></tr></table></div>
+<h2>Sai lầm hay gặp</h2>
+<ul><li><b>Liveness kiểm tra phụ thuộc bên ngoài</b> (database, API khác): khi database chậm, mọi Pod đều fail liveness và bị restart cùng lúc, biến sự cố nhỏ thành sự cố lan rộng. Liveness chỉ nên trả lời "tiến trình này còn chạy ổn không", không phải "mọi thứ xung quanh có ổn không".</li><li><b>Không có startup probe cho ứng dụng khởi động chậm</b>: liveness giết container trước khi nó kịp lên, rồi vào <code>CrashLoopBackOff</code>. Dùng startup probe, đừng kéo dài <code>initialDelaySeconds</code> cho liveness.</li><li><b>Không có readiness probe</b>: Service chuyển traffic tới Pod chưa sẵn sàng, và rolling update không biết khi nào Pod mới dùng được.</li><li><b>Timeout 1 giây mặc định</b> quá gắt với ứng dụng có GC dài hoặc đang tải cao: probe fail vì chậm chứ không phải vì hỏng.</li><li><b>Probe nặng</b>: endpoint health chạy truy vấn đắt, gọi mỗi vài giây trên mọi Pod sẽ tự gây tải.</li></ul>
+<div class="callout warn"><b>Readiness phụ thuộc bên ngoài cần cân nhắc</b><p>Nếu readiness kiểm tra database và database mất kết nối, <b>mọi</b> Pod cùng NotReady, Service không còn endpoint nào và người dùng nhận 503 toàn phần. Đôi khi trả lỗi cho từng request còn tốt hơn là gỡ sạch cả dịch vụ. Cân nhắc kỹ phụ thuộc nào thực sự "bắt buộc" mới đưa vào readiness.</p></div>
+<h2>Rolling update và probe</h2>
+<p>Với <code>Deployment</code> dùng chiến lược <code>RollingUpdate</code>, Pod mới phải <b>Ready</b> (và qua <code>minReadySeconds</code> nếu có) thì Pod cũ mới bị tắt. Readiness probe chính là tín hiệu để rolling update tiến lên hay dừng lại.</p>
+<pre><code>spec:
+  replicas: 4
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1            # được dư thêm tối đa 1 Pod trong lúc cập nhật
+      maxUnavailable: 0      # không cho thiếu Pod Ready: cập nhật chậm hơn nhưng không giảm công suất</code></pre>
+<pre><code>kubectl rollout status deploy/web
+kubectl rollout history deploy/web
+kubectl rollout undo deploy/web</code></pre>
+<h2>Tắt Pod êm (graceful shutdown)</h2>
+<p>Khi Pod bị xóa (hoặc rolling update thay Pod), thứ tự như sau:</p>
+<ol><li>Pod chuyển sang <code>Terminating</code>. <b>Song song</b>, controller gỡ Pod khỏi EndpointSlice của Service.</li><li>kubelet chạy <code>preStop</code> hook (nếu có).</li><li>kubelet gửi <code>SIGTERM</code> tới tiến trình PID 1 của container.</li><li>Chờ tối đa <code>terminationGracePeriodSeconds</code> (mặc định 30 giây, đếm từ lúc bắt đầu Terminating, đã gồm thời gian preStop).</li><li>Hết hạn mà container chưa thoát thì kubelet gửi <code>SIGKILL</code>.</li></ol>
+<svg class="dg" viewBox="0 0 760 282" role="img" aria-label="Trình tự khi Pod bị xóa: control plane gỡ Pod khỏi EndpointSlice và các thành phần mạng cập nhật mất vài giây, trong khi kubelet chạy preStop, gửi SIGTERM, chờ ứng dụng tắt êm rồi gửi SIGKILL nếu quá hạn; khoảng trễ giữa hai nhánh là cửa sổ rủi ro">
+  <defs><marker id="ar-tm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--blue)"/></marker></defs>
+  <rect class="box" x="20" y="74" width="130" height="100" rx="6"/>
+  <text x="85.0" y="111.5" text-anchor="middle">Pod bị xóa</text>
+  <text x="85.0" y="128.5" text-anchor="middle">hoặc rolling</text>
+  <text x="85.0" y="145.5" text-anchor="middle">update</text>
+  <rect class="zone" x="180" y="14" width="560" height="100" rx="8"/>
+  <text x="194" y="35" class="zt">Control plane</text>
+  <rect class="zone" x="180" y="130" width="560" height="100" rx="8"/>
+  <text x="194" y="151" class="zt">Kubelet trên node</text>
+  <line class="ln" x1="150" y1="100" x2="180" y2="64" marker-end="url(#ar-tm)"/>
+  <line class="ln" x1="150" y1="148" x2="180" y2="180" marker-end="url(#ar-tm)"/>
+  <rect class="box" x="194" y="44" width="150" height="56" rx="6"/>
+  <text x="269.0" y="68.0" text-anchor="middle">Gỡ Pod khỏi</text>
+  <text x="269.0" y="85.0" text-anchor="middle">EndpointSlice</text>
+  <rect class="box" x="370" y="44" width="190" height="56" rx="6"/>
+  <text x="465.0" y="68.0" text-anchor="middle">kube-proxy, Ingress, LB</text>
+  <text x="465.0" y="85.0" text-anchor="middle">cập nhật (mất vài giây)</text>
+  <rect class="warnbox" x="586" y="44" width="140" height="56" rx="6"/>
+  <text x="656.0" y="68.0" text-anchor="middle">Cửa sổ rủi ro:</text>
+  <text x="656.0" y="85.0" text-anchor="middle">traffic tới Pod cũ</text>
+  <line class="ln" x1="344" y1="72" x2="370" y2="72" marker-end="url(#ar-tm)"/>
+  <line class="ln" x1="560" y1="72" x2="586" y2="72" marker-end="url(#ar-tm)"/>
+  <rect class="box" x="194" y="160" width="118" height="56" rx="6"/>
+  <text x="253.0" y="184.0" text-anchor="middle">preStop</text>
+  <text x="253.0" y="201.0" text-anchor="middle">hook (sleep)</text>
+  <line class="ln" x1="312" y1="188" x2="332" y2="188" marker-end="url(#ar-tm)"/>
+  <rect class="box" x="332" y="160" width="118" height="56" rx="6"/>
+  <text x="391.0" y="184.0" text-anchor="middle">SIGTERM</text>
+  <text x="391.0" y="201.0" text-anchor="middle">tới PID 1</text>
+  <line class="ln" x1="450" y1="188" x2="470" y2="188" marker-end="url(#ar-tm)"/>
+  <rect class="tipbox" x="470" y="160" width="118" height="56" rx="6"/>
+  <text x="529.0" y="184.0" text-anchor="middle">App tắt êm</text>
+  <text x="529.0" y="201.0" text-anchor="middle">xả kết nối</text>
+  <line class="ln" x1="588" y1="188" x2="608" y2="188" marker-end="url(#ar-tm)"/>
+  <rect class="warnbox" x="608" y="160" width="118" height="56" rx="6"/>
+  <text x="667.0" y="184.0" text-anchor="middle">SIGKILL</text>
+  <text x="667.0" y="201.0" text-anchor="middle">nếu quá hạn</text>
+  <text x="380" y="254" text-anchor="middle" class="sm">Giảm lỗi 502 khi deploy: preStop có độ trễ, ứng dụng xử lý SIGTERM, terminationGracePeriodSeconds đủ dài.</text>
+  <text x="380" y="272" text-anchor="middle" class="sm">terminationGracePeriodSeconds (mặc định 30s) đếm từ lúc Pod bắt đầu Terminating, đã gồm thời gian preStop.</text>
+</svg>
+
+<p>Vấn đề nằm ở bước 1: việc gỡ khỏi endpoints cần vài giây để lan tới kube-proxy, Ingress và load balancer bên ngoài. Trong lúc đó Pod <b>đã nhận SIGTERM nhưng vẫn nhận request mới</b>, nên ứng dụng tắt ngay sẽ gây lỗi 502 hoặc connection reset ngắn mỗi lần deploy.</p>
+<p>Cách giảm:</p>
+<ul><li><b>preStop có độ trễ</b> vài giây (ví dụ 5 đến 10) để endpoint kịp lan ra trước khi ứng dụng nhận SIGTERM.</li><li><b>Ứng dụng xử lý SIGTERM đúng cách</b>: ngừng nhận kết nối mới, hoàn tất các request đang chạy, đóng kết nối rồi thoát.</li><li><b><code>terminationGracePeriodSeconds</code> đủ dài</b> cho request lâu nhất, cộng thời gian preStop.</li><li><b>Ứng dụng phải nhận được SIGTERM</b>: nếu dùng shell script làm <code>ENTRYPOINT</code> dạng chuỗi, tiến trình PID 1 là <code>sh</code> và có thể không chuyển tiếp signal. Dùng dạng <code>exec</code> hoặc một init nhỏ như <code>tini</code>. PID 1 không có hành vi signal mặc định, xem thêm trang <a href="https://tracviethustcs.github.io/linux-network-notes/#os-process" target="_blank" rel="noopener">Process trong site Linux</a>.</li><li>Timeout keep-alive của load balancer nên lớn hơn timeout keep-alive của ứng dụng phía sau.</li></ul>
+<pre><code>spec:
+  terminationGracePeriodSeconds: 45
+  containers:
+    - name: web
+      lifecycle:
+        preStop:
+          exec:
+            command: ["sleep", "10"]</code></pre>
+<p>Cách này cần image có lệnh <code>sleep</code> (image distroless thì không có). Các bản Kubernetes mới hỗ trợ khai báo <code>sleep</code> trực tiếp trong <code>preStop</code>, hãy kiểm tra theo phiên bản bạn dùng.</p>
+<h2>PodDisruptionBudget (PDB)</h2>
+<p>Gián đoạn Pod có hai loại: <b>tự nguyện</b> (voluntary: <code>kubectl drain</code>, nâng cấp node, cluster autoscaler thu hẹp node) và <b>ngoài ý muốn</b> (node chết, mất điện, OOM). PDB chỉ giới hạn loại thứ nhất: nó chặn các yêu cầu <b>eviction</b> làm số Pod khả dụng thấp hơn mức cho phép.</p>
+<pre><code>apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: web}
+spec:
+  maxUnavailable: 1            # hoặc minAvailable: 3 (chỉ dùng một trong hai)
+  selector:
+    matchLabels: {app: web}</code></pre>
+<ul><li>Khai báo <code>minAvailable</code> hoặc <code>maxUnavailable</code>, dạng số hoặc phần trăm.</li><li>PDB <b>không</b> áp dụng cho rolling update của Deployment (việc đó do <code>maxSurge</code> và <code>maxUnavailable</code> của chiến lược cập nhật quyết định), cũng không bảo vệ khi node hỏng đột ngột.</li></ul>
+<div class="callout warn"><b>Một PDB quá chặt làm treo việc nâng cấp node</b><p><code>minAvailable</code> bằng đúng số replica, hoặc Deployment 1 replica có <code>minAvailable: 1</code>, nghĩa là <b>không bao giờ</b> có Pod nào được phép bị evict. <code>kubectl drain</code> treo mãi và nâng cấp cluster đứng giữa chừng. Luôn để ít nhất một Pod được phép gián đoạn (cột <code>ALLOWED DISRUPTIONS</code> của <code>kubectl get pdb</code> phải lớn hơn 0).</p></div>
+<pre><code>kubectl get pdb
+kubectl drain NODE --ignore-daemonsets --delete-emptydir-data
+kubectl uncordon NODE</code></pre>
+<p>Kết hợp PDB với <code>topologySpreadConstraints</code> hoặc anti-affinity (xem <a href="#scheduling">Scheduling</a>) để các replica nằm trên node và zone khác nhau, nếu không PDB không có ý nghĩa khi cả hai replica nằm cùng một node.</p>
+<h2>Lệnh debug</h2>
+<pre><code>kubectl describe pod POD                         # mục Events: "Liveness probe failed: HTTP probe failed with statuscode: 500"
+kubectl get endpointslices -l kubernetes.io/service-name=web
+kubectl logs POD --previous                      # log của lần chạy trước khi bị restart
+kubectl get pod POD -o jsonpath='{.status.containerStatuses[*].restartCount}'</code></pre>
 </article>
 
 <!-- ============ SECURITY ============ -->
@@ -1378,6 +1711,50 @@ spec:
 <li>Runtime: seccomp, AppArmor, SELinux. Giám sát hành vi bằng Falco hoặc Tetragon.</li>
 <li>Cô lập mạnh hơn: <code>RuntimeClass</code> với gVisor hoặc Kata Containers.</li>
 </ul>
+</article>
+
+<article class="page" data-id="adv-supply-chain" data-group="Nâng cao: Bảo mật" data-title="Bảo mật chuỗi cung ứng image" hidden>
+<h1>Bảo mật chuỗi cung ứng image</h1>
+<p class="lead">Code của bạn chỉ là một phần nhỏ của thứ chạy trong container: image nền, thư viện, công cụ build đều là nguồn rủi ro. Chuỗi cung ứng nghĩa là biết image đến từ đâu, chứa gì và chưa bị sửa.</p>
+<h2>Rủi ro</h2>
+<div class="tw"><table><tr><th>Rủi ro</th><th>Ví dụ</th></tr><tr><td>Lỗ hổng trong image nền hoặc thư viện</td><td>Image cũ chứa CVE đã có bản vá</td></tr><tr><td>Image độc hại hoặc nhái tên (typosquatting)</td><td><code>nginix</code> thay vì <code>nginx</code> trên registry công cộng</td></tr><tr><td>Tag bị đổi nội dung</td><td><code>latest</code> hoặc <code>1.4</code> hôm nay trỏ tới image khác hôm qua</td></tr><tr><td>Registry hoặc pipeline CI bị xâm nhập</td><td>Image bị thay giữa lúc build và lúc chạy</td></tr><tr><td>Không biết bên trong có gì</td><td>Khi có CVE mới, không trả lời được "cái nào của tôi bị ảnh hưởng"</td></tr></table></div>
+<h2>Các lớp phòng thủ</h2>
+<div class="tw"><table><tr><th>Biện pháp</th><th>Làm gì</th><th>Công cụ phổ biến</th></tr><tr><td>Image tối giản</td><td>Ít thành phần thì ít lỗ hổng, bề mặt tấn công nhỏ</td><td>distroless, alpine, <code>scratch</code> (đánh đổi: khó debug vì thiếu shell)</td></tr><tr><td><b>Ghim bằng digest</b></td><td><code>image@sha256:...</code> là bất biến, không bị đổi ngầm</td><td>Renovate, Dependabot cập nhật digest tự động</td></tr><tr><td><b>Quét lỗ hổng</b></td><td>Phát hiện CVE trong CI và định kỳ trên registry</td><td>Trivy, Grype</td></tr><tr><td><b>SBOM</b></td><td>Danh sách thành phần bên trong image, tra cứu khi có CVE mới</td><td>Syft (định dạng SPDX hoặc CycloneDX)</td></tr><tr><td><b>Ký và xác minh</b></td><td>Chứng minh image do pipeline của bạn tạo ra</td><td>cosign (Sigstore)</td></tr><tr><td><b>Kiểm soát tại admission</b></td><td>Từ chối Pod dùng image chưa ký, tag <code>latest</code>, hoặc nguồn không cho phép</td><td>Kyverno, các policy engine khác</td></tr><tr><td><b>Registry nội bộ, mirror</b></td><td>Chỉ chạy image đã được duyệt và sao chép vào registry của mình</td><td>Harbor, Nexus, registry của cloud</td></tr><tr><td>Giảm quyền lúc chạy</td><td>Cho dù image bị xâm nhập, kẻ tấn công cũng bị hạn chế</td><td><code>runAsNonRoot</code>, <code>readOnlyRootFilesystem</code>, bỏ capabilities (xem <a href="#psa">PSA</a>)</td></tr></table></div>
+<h3>Ghim digest</h3>
+<pre><code><span class="cm"># Thay vì</span>
+image: registry.example.com/web:1.4.2
+<span class="cm"># Dùng</span>
+image: registry.example.com/web@sha256:3f1a9c...   # digest cụ thể; tag có thể ghi kèm để dễ đọc</code></pre>
+<p>Digest lấy từ <code>docker buildx imagetools inspect IMAGE</code> hoặc <code>crane digest IMAGE</code>. Ghim digest đổi lại việc phải cập nhật có chủ đích: dùng công cụ tự động (Renovate) mở pull request khi có bản mới, và để pipeline kiểm thử trước khi gộp.</p>
+<h3>Quét và tạo SBOM</h3>
+<pre><code>trivy image --severity HIGH,CRITICAL --exit-code 1 registry.example.com/web:1.4.2
+syft registry.example.com/web:1.4.2 -o spdx-json &gt; sbom.spdx.json</code></pre>
+<p>Đặt quét ở CI với ngưỡng rõ ràng (chặn build nếu có lỗ hổng mức cao đã có bản vá), và quét lại <b>định kỳ</b> image đang chạy, vì CVE mới xuất hiện sau khi image được build.</p>
+<h3>Ký và xác minh với cosign</h3>
+<pre><code>cosign generate-key-pair                                   # tạo cosign.key và cosign.pub
+cosign sign --key cosign.key registry.example.com/web@sha256:3f1a9c...
+cosign verify --key cosign.pub registry.example.com/web@sha256:3f1a9c...</code></pre>
+<p>Cosign còn hỗ trợ ký "keyless" qua danh tính OIDC của CI; khi xác minh kiểu này cần chỉ rõ danh tính và nhà phát hành mong đợi. Cú pháp thay đổi theo phiên bản, hãy đọc tài liệu hiện hành. Khoá ký riêng phải được bảo vệ như một bí mật (Vault, KMS), không để trong repo.</p>
+<h3>Ép buộc tại admission bằng Kyverno</h3>
+<p>Ký mà không kiểm tra lúc chạy thì chỉ là hình thức. Policy engine chặn Pod vi phạm:</p>
+<pre><code>apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata: {name: disallow-latest-tag}
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: no-latest
+      match:
+        any: [{resources: {kinds: [Pod]}}]
+      validate:
+        message: "Không dùng tag latest, hãy ghim phiên bản hoặc digest."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"</code></pre>
+<p>Cùng cơ chế có thể dùng để chỉ cho phép image từ registry nội bộ, hoặc dùng quy tắc <code>verifyImages</code> của Kyverno để yêu cầu chữ ký cosign. Trường và cú pháp policy thay đổi theo phiên bản Kyverno, hãy kiểm tra tài liệu của phiên bản bạn cài. Bắt đầu ở chế độ <code>Audit</code> để xem tác động trước khi <code>Enforce</code>.</p>
+<div class="callout tip"><b>Lộ trình thực tế</b><p>Đừng làm tất cả một lúc. Thứ tự hợp lý: (1) bỏ <code>latest</code> và ghim phiên bản, (2) quét trong CI, (3) dùng registry nội bộ làm nguồn duy nhất, (4) chạy non-root với filesystem chỉ đọc, (5) SBOM, (6) ký và xác minh tại admission. Trong thiết kế on-prem của site này, chart và image được mirror vào registry nội bộ và ghim digest (<a href="#tool-sandbox">OpenSandbox</a>); đó chính là bước 3 và 1.</p></div>
+<div class="callout warn"><b>Giới hạn của nội dung này</b><p>Tên công cụ, cờ dòng lệnh và trường policy ở trang này theo hiểu biết của người viết, <b>không tra cứu trực tuyến</b>, và có thể đã đổi theo phiên bản. Hãy đối chiếu tài liệu chính thức của Trivy, Syft, cosign và Kyverno trước khi áp dụng.</p></div>
 </article>
 
 <!-- ============ HELM ============ -->
@@ -1828,6 +2205,93 @@ spec:
 <tr><td>VMware, Azure, GCP</td><td>vSphere CSI, Azure Disk/File CSI, GCE PD CSI</td></tr>
 </table></div>
 <div class="callout"><b>Ghi nhớ</b><p>Với database: ưu tiên block storage (RWO) hiệu năng cao và nhớ snapshot, backup. Chọn <code>WaitForFirstConsumer</code>, đặt <code>reclaimPolicy: Retain</code> cho dữ liệu quan trọng để xóa nhầm PVC không mất dữ liệu.</p></div>
+</article>
+
+<article class="page" data-id="adv-operators" data-group="Nâng cao: Mở rộng" data-title="CRD và Operator" hidden>
+<h1>CRD và Operator</h1>
+<p class="lead">Kubernetes mở rộng được bằng chính API của nó. Hiểu CRD và operator giải thích vì sao cert-manager, ECK, Flux, Prometheus Operator hay OpenSandbox đều hoạt động theo cùng một mô hình.</p>
+<h2>Custom Resource Definition (CRD)</h2>
+<p>API của Kubernetes có sẵn các kiểu như Pod, Deployment, Service. <b>CRD</b> cho phép bạn thêm kiểu mới (ví dụ <code>Certificate</code>, <code>Elasticsearch</code>, <code>HelmRelease</code>). Sau khi đăng ký CRD, bạn tạo, sửa, xóa các <b>custom resource</b> (CR) bằng <code>kubectl</code> y như resource thường, và API server lưu chúng vào etcd, kiểm tra theo schema, áp RBAC.</p>
+<pre><code>apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata: {name: backups.example.com}
+spec:
+  group: example.com
+  scope: Namespaced
+  names: {kind: Backup, plural: backups, singular: backup}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                schedule: {type: string}
+                retentionDays: {type: integer, minimum: 1}</code></pre>
+<pre><code>apiVersion: example.com/v1
+kind: Backup
+metadata: {name: nightly}
+spec: {schedule: "0 2 * * *", retentionDays: 14}</code></pre>
+<p>Điều quan trọng: <b>một CRD tự nó không làm gì</b>. Nó chỉ là nơi lưu một bản khai báo. Việc biến khai báo thành hành động là của controller.</p>
+<h2>Controller và operator</h2>
+<p><b>Controller</b> chạy một vòng lặp <b>reconcile</b>: quan sát trạng thái mong muốn (<code>spec</code>) và trạng thái thực tế, làm những gì cần để hai thứ khớp nhau, rồi ghi kết quả vào <code>status</code>. Đây chính là cách Deployment controller tạo ReplicaSet và Pod.</p>
+<p><b>Operator = CRD + controller đóng gói kiến thức vận hành</b> của một phần mềm cụ thể: cài đặt, nâng cấp, sao lưu, failover, cấp chứng chỉ.</p>
+<svg class="dg" viewBox="0 0 760 292" role="img" aria-label="Vòng reconcile của operator: người dùng hoặc Flux áp Custom Resource lên API server, API server lưu vào etcd, operator theo dõi CR, tạo và sửa StatefulSet, Service, Secret cho khớp spec, rồi ghi kết quả vào status của CR">
+  <defs><marker id="ar-op" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--blue)"/></marker></defs>
+  <rect class="box" x="20" y="48" width="190" height="56" rx="6"/>
+  <text x="115.0" y="72.0" text-anchor="middle">kubectl hoặc Flux</text>
+  <text x="115.0" y="89.0" text-anchor="middle">áp Custom Resource</text>
+  <rect class="box" x="250" y="48" width="180" height="56" rx="6"/>
+  <text x="340.0" y="72.0" text-anchor="middle">API server</text>
+  <text x="340.0" y="89.0" text-anchor="middle">lưu CR trong etcd</text>
+  <rect class="box" x="470" y="48" width="270" height="56" rx="6"/>
+  <text x="605.0" y="72.0" text-anchor="middle" class="bold">Operator (controller)</text>
+  <text x="605.0" y="89.0" text-anchor="middle">watch CR, so spec với thực tế</text>
+  <line class="ln" x1="210" y1="76" x2="250" y2="76" marker-end="url(#ar-op)"/>
+  <line class="ln" x1="430" y1="76" x2="470" y2="76" marker-end="url(#ar-op)"/>
+  <path class="ln dash" d="M605 48 V24 H340 V48" marker-end="url(#ar-op)"/>
+  <text x="472" y="18" text-anchor="middle" class="sm">ghi status</text>
+  <line class="ln" x1="605" y1="104" x2="605" y2="140"/>
+  <line class="ln" x1="392" y1="140" x2="674" y2="140"/>
+  <line class="ln" x1="392" y1="140" x2="392" y2="172" marker-end="url(#ar-op)"/>
+  <line class="ln" x1="533" y1="140" x2="533" y2="172" marker-end="url(#ar-op)"/>
+  <line class="ln" x1="674" y1="140" x2="674" y2="172" marker-end="url(#ar-op)"/>
+  <text x="596" y="128" text-anchor="end" class="sm">tạo và sửa cho khớp spec</text>
+  <rect class="pod" x="330" y="172" width="124" height="52" rx="6"/>
+  <text x="392.0" y="194.0" text-anchor="middle">StatefulSet</text>
+  <text x="392.0" y="211.0" text-anchor="middle">hoặc Deployment</text>
+  <rect class="pod" x="471" y="172" width="124" height="52" rx="6"/>
+  <text x="533.0" y="194.0" text-anchor="middle">Service</text>
+  <text x="533.0" y="211.0" text-anchor="middle">Ingress</text>
+  <rect class="pod" x="612" y="172" width="124" height="52" rx="6"/>
+  <text x="674.0" y="194.0" text-anchor="middle">Secret</text>
+  <text x="674.0" y="211.0" text-anchor="middle">ConfigMap</text>
+  <rect class="tipbox" x="20" y="150" width="270" height="90" rx="6"/>
+  <text x="155.0" y="182.5" text-anchor="middle">CRD: định nghĩa kiểu resource mới</text>
+  <text x="155.0" y="199.5" text-anchor="middle">CR: một bản khai báo (spec)</text>
+  <text x="155.0" y="216.5" text-anchor="middle">status: operator ghi kết quả</text>
+  <text x="380" y="266" text-anchor="middle" class="sm">Reconcile lặp lại đến khi thực tế khớp spec; chạy nhiều lần vẫn an toàn (idempotent).</text>
+</svg>
+
+<p>Hai tính chất làm vòng lặp này bền: <b>level-triggered</b> (controller đối chiếu toàn bộ trạng thái mỗi lần chứ không chỉ phản ứng với một sự kiện, nên bỏ lỡ sự kiện cũng không sao) và <b>idempotent</b> (chạy nhiều lần cho cùng kết quả).</p>
+<h2>Các operator đã gặp trong site này</h2>
+<div class="tw"><table><tr><th>Operator</th><th>CR chính</th><th>Việc nó làm</th></tr><tr><td>cert-manager</td><td><code>Certificate</code>, <code>Issuer</code></td><td>Cấp và gia hạn chứng chỉ vào Secret</td></tr><tr><td>ECK</td><td><code>Elasticsearch</code>, <code>Kibana</code></td><td>Dựng cluster, cấp TLS, nâng cấp từng node</td></tr><tr><td>Flux</td><td><code>GitRepository</code>, <code>HelmRelease</code>, <code>Kustomization</code></td><td>Đồng bộ cluster theo Git</td></tr><tr><td>Prometheus Operator</td><td><code>ServiceMonitor</code>, <code>PrometheusRule</code></td><td>Cấu hình Prometheus theo khai báo</td></tr><tr><td>Vault Secrets Operator</td><td><code>VaultStaticSecret</code></td><td>Đồng bộ secret từ Vault</td></tr><tr><td>OpenTelemetry Operator</td><td><code>OpenTelemetryCollector</code></td><td>Dựng và giữ đồng bộ Collector</td></tr><tr><td>OpenSandbox controller</td><td><code>BatchSandbox</code></td><td>Tạo Pod sandbox theo yêu cầu</td></tr></table></div>
+<h2>Làm việc với CRD hàng ngày</h2>
+<pre><code>kubectl get crd
+kubectl api-resources --api-group=cert-manager.io
+kubectl explain certificate.spec --recursive | head -50     # schema của một CR
+kubectl get certificate -A
+kubectl describe elasticsearch logs                         # xem Events và status do operator ghi
+kubectl get elasticsearch logs -o yaml                      # status.health, phase...</code></pre>
+<p>Khi một CR "không chạy", hãy đọc theo thứ tự: <code>status</code> và <code>Events</code> của CR (operator thường ghi lý do ở đó), log của Pod operator, rồi các resource con mà nó tạo ra (Pod, Secret, Service).</p>
+<h2>Rủi ro và lưu ý</h2>
+<div class="callout warn"><b>Những điều hay gây sự cố</b><ul><li><b>Xóa CRD sẽ xóa mọi CR</b> thuộc kiểu đó, và theo đó thường kéo theo cả tài nguyên mà operator đã tạo (kể cả dữ liệu). Không xóa CRD một cách tùy tiện, kể cả khi "dọn dẹp" chart cũ.</li><li><b>Helm không nâng cấp CRD</b> đặt trong thư mục <code>crds/</code> của chart (chỉ cài lần đầu). Nâng cấp operator thường cần áp CRD mới riêng, theo hướng dẫn của dự án.</li><li><b>Admission webhook của operator</b>: nếu Pod webhook chết, việc tạo CR (và đôi khi cả resource khác) bị chặn, tùy <code>failurePolicy</code>. Cần biết webhook nào đang can thiệp vào API, và chứng chỉ của nó (thường do cert-manager cấp) còn hạn.</li><li><b>Finalizer kẹt</b>: CR ở <code>Terminating</code> mãi vì operator đã bị gỡ trước khi dọn xong. Xóa operator sau khi xóa CR, không làm ngược lại.</li><li><b>Quyền của operator</b> thường rất rộng (đọc secret, tạo workload). Xem ClusterRole của nó trước khi cài, và chỉ cài operator từ nguồn bạn tin.</li></ul></div>
+<h2>Tự viết operator?</h2>
+<p>Thường là không cần: tìm operator có sẵn trước. Nếu bắt buộc, dùng khung có sẵn (<code>kubebuilder</code>, <code>operator-sdk</code>, thư viện <code>controller-runtime</code>) và bắt đầu từ nhu cầu nhỏ. Với nhu cầu "tạo nhiều resource từ một khai báo", Helm, Kustomize hoặc công cụ như Crossplane có thể đủ mà không cần viết controller.</p>
 </article>
 
 <!-- ============ PLATFORMS ============ -->
