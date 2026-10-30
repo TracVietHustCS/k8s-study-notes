@@ -113,6 +113,25 @@ th{background:var(--code);font-weight:500}
 .dg .tipbox{fill:var(--tip);stroke:var(--tip-b);stroke-width:1.5}
 .dg .bold{font-weight:700}
 .dg .ring{fill:var(--code);stroke:var(--note-b);stroke-width:1.2}
+/* figures from the source design document */
+.fig{margin:18px 0}
+.fig a.zoom{display:block;border:1px solid var(--line);border-radius:6px;background:#fff;padding:8px;cursor:zoom-in}
+.fig a.zoom:hover{border-color:var(--blue)}
+.fig img{display:block;width:100%;height:auto}
+.fig figcaption{font-size:13.5px;color:var(--muted);margin-top:6px;max-width:80ch}
+.fig figcaption span{display:block;font-size:12.5px}
+#lb{position:fixed;inset:0;z-index:100;background:rgba(8,12,18,.88);display:none;flex-direction:column}
+#lb.open{display:flex}
+#lb .bar{display:flex;align-items:center;gap:12px;padding:10px 16px;padding-top:calc(10px + env(safe-area-inset-top,0px));color:#fff;font-size:14px}
+#lb .bar span{flex:1;opacity:.85}
+#lb button{font:inherit;font-size:14px;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:4px;padding:4px 12px;cursor:pointer}
+#lb button:hover{background:rgba(255,255,255,.14)}
+#lb .st{flex:1;overflow:auto;padding:0 16px 16px}
+#lb img{display:block;margin:0 auto;max-width:100%;height:auto;background:#fff;border-radius:4px;cursor:zoom-in}
+#lb img.full{max-width:none;width:auto;cursor:zoom-out}
+.nav .links a{white-space:nowrap}
+@media (max-width:1260px) and (min-width:821px){.nav .links a:nth-child(n+4){display:none}}
+@media (max-width:560px){.nav{gap:10px;padding:0 12px}.brand>span{display:none}.search input{min-width:0}#theme{padding:0 8px;font-size:12px}}
 .mark{display:flex;align-items:center;gap:10px;margin:40px 0 0;padding-top:20px;border-top:1px solid var(--line)}
 .mark button{font:inherit;font-size:14px;border:1px solid var(--blue);color:var(--blue);background:transparent;border-radius:4px;padding:6px 14px;cursor:pointer}
 .mark button[aria-pressed="true"]{background:var(--blue);color:#fff}
@@ -180,6 +199,7 @@ footer{border-top:1px solid var(--line);margin-top:48px;padding-top:16px;font-si
   <div class="search"><input id="q" type="search" placeholder="Tìm trong ghi chú  ( / )" aria-label="Tìm trong ghi chú"></div>
   <button class="ibtn" id="theme" aria-label="Đổi giao diện sáng/tối">Sáng/Tối</button>
 </header>
+<div id="lb" role="dialog" aria-modal="true" aria-label="Xem hình lớn"><div class="bar"><span id="lbcap"></span><button type="button" id="lbz">Cỡ thật</button><button type="button" id="lbx">Đóng (Esc)</button></div><div class="st"><img id="lbimg" alt=""></div></div>
 <div id="scrim"></div>
 
 <div class="shell">
@@ -3169,65 +3189,8 @@ velero restore create --from-backup daily-apps-20261030020000</code></pre>
 <h1>Elasticsearch trên Kubernetes với ECK</h1>
 <p class="lead">ECK (Elastic Cloud on Kubernetes) là operator do Elastic phát hành để chạy Elasticsearch, Kibana và các thành phần Elastic khác. Ví dụ ở đây là một nền tảng log đa tenant, mỗi workspace có data stream, thời gian lưu và khóa truy cập riêng.</p>
 
-<h2>Cách ECK vận hành</h2>
-<svg class="dg" viewBox="0 0 760 400" role="img" aria-label="ECK: Flux áp resource Elasticsearch, operator sinh StatefulSet, Service và Secret; mỗi node Elasticsearch chạy trên một worker riêng với volume riêng; dữ liệu đi qua data stream, rollover rồi ILM xóa theo thời gian lưu">
-  <defs><marker id="ar-eck" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--blue)"/></marker></defs>
-  <rect class="box" x="20" y="14" width="140" height="50" rx="6"/>
-  <text x="90.0" y="43.5" text-anchor="middle">Git + Flux</text>
-  <rect class="box" x="190" y="14" width="180" height="50" rx="6"/>
-  <text x="280.0" y="35.0" text-anchor="middle">Resource Elasticsearch</text>
-  <text x="280.0" y="52.0" text-anchor="middle">và Kibana (CR)</text>
-  <rect class="box" x="400" y="14" width="150" height="50" rx="6"/>
-  <text x="475.0" y="43.5" text-anchor="middle">ECK operator</text>
-  <rect class="box" x="580" y="14" width="160" height="50" rx="6"/>
-  <text x="660.0" y="35.0" text-anchor="middle">Sinh StatefulSet,</text>
-  <text x="660.0" y="52.0" text-anchor="middle">Service, Secret</text>
-  <line class="ln" x1="160" y1="39" x2="190" y2="39" marker-end="url(#ar-eck)"/>
-  <line class="ln" x1="370" y1="39" x2="400" y2="39" marker-end="url(#ar-eck)"/>
-  <line class="ln" x1="550" y1="39" x2="580" y2="39" marker-end="url(#ar-eck)"/>
-  <line class="ln dash" x1="660" y1="64" x2="660" y2="108" marker-end="url(#ar-eck)"/>
-  <rect class="zone" x="20" y="108" width="720" height="202" rx="8"/>
-  <text x="34" y="129" class="zt">Cluster Elasticsearch: mỗi node một worker (anti-affinity)</text>
-  <rect class="pod" x="40" y="146" width="200" height="56" rx="6"/>
-  <text x="140.0" y="170.0" text-anchor="middle">Pod es-0</text>
-  <text x="140.0" y="187.0" text-anchor="middle">worker A</text>
-  <rect class="tipbox" x="70" y="232" width="140" height="44" rx="6"/>
-  <text x="140.0" y="250.0" text-anchor="middle">PVC riêng</text>
-  <text x="140.0" y="267.0" text-anchor="middle">block storage, RWO</text>
-  <line class="ln" x1="140" y1="202" x2="140" y2="232" marker-end="url(#ar-eck)"/>
-  <rect class="pod" x="280" y="146" width="200" height="56" rx="6"/>
-  <text x="380.0" y="170.0" text-anchor="middle">Pod es-1</text>
-  <text x="380.0" y="187.0" text-anchor="middle">worker B</text>
-  <rect class="tipbox" x="310" y="232" width="140" height="44" rx="6"/>
-  <text x="380.0" y="250.0" text-anchor="middle">PVC riêng</text>
-  <text x="380.0" y="267.0" text-anchor="middle">block storage, RWO</text>
-  <line class="ln" x1="380" y1="202" x2="380" y2="232" marker-end="url(#ar-eck)"/>
-  <rect class="pod" x="520" y="146" width="200" height="56" rx="6"/>
-  <text x="620.0" y="170.0" text-anchor="middle">Pod es-2</text>
-  <text x="620.0" y="187.0" text-anchor="middle">worker C</text>
-  <rect class="tipbox" x="550" y="232" width="140" height="44" rx="6"/>
-  <text x="620.0" y="250.0" text-anchor="middle">PVC riêng</text>
-  <text x="620.0" y="267.0" text-anchor="middle">block storage, RWO</text>
-  <line class="ln" x1="620" y1="202" x2="620" y2="232" marker-end="url(#ar-eck)"/>
-  <line class="ln dash" x1="240" y1="174" x2="280" y2="174" marker-end="url(#ar-eck)" marker-start="url(#ar-eck)"/>
-  <line class="ln dash" x1="480" y1="174" x2="520" y2="174" marker-end="url(#ar-eck)" marker-start="url(#ar-eck)"/>
-  <text x="380" y="296" text-anchor="middle" class="sm">Số node lẻ: 3 node chịu mất 1, 5 node chịu mất 2. Shard có bản sao ở node khác (nét đứt).</text>
-  <rect class="box" x="20" y="336" width="150" height="48" rx="6"/>
-  <text x="95.0" y="364.5" text-anchor="middle">Log từ Collector</text>
-  <rect class="box" x="200" y="336" width="130" height="48" rx="6"/>
-  <text x="265.0" y="356.0" text-anchor="middle">Data stream</text>
-  <text x="265.0" y="373.0" text-anchor="middle">mỗi workspace</text>
-  <rect class="box" x="360" y="336" width="190" height="48" rx="6"/>
-  <text x="455.0" y="356.0" text-anchor="middle">Rollover</text>
-  <text x="455.0" y="373.0" text-anchor="middle">theo kích thước, tuổi</text>
-  <rect class="box" x="580" y="336" width="160" height="48" rx="6"/>
-  <text x="660.0" y="356.0" text-anchor="middle">ILM xóa index</text>
-  <text x="660.0" y="373.0" text-anchor="middle">quá thời gian lưu</text>
-  <line class="ln" x1="170" y1="360" x2="200" y2="360" marker-end="url(#ar-eck)"/>
-  <line class="ln" x1="330" y1="360" x2="360" y2="360" marker-end="url(#ar-eck)"/>
-  <line class="ln" x1="550" y1="360" x2="580" y2="360" marker-end="url(#ar-eck)"/>
-</svg>
-
+<h2>Kiến trúc đích</h2>
+<figure class="fig"><a class="zoom" href="img/elasticsearch-architecture.png" title="Bấm để phóng to"><img src="img/elasticsearch-architecture.png" alt="Kiến trúc Elasticsearch trên Kubernetes: GitOps, ECK operator, cluster Elasticsearch, lưu trữ bền và kho backup" width="1734" height="1162" loading="lazy"></a><figcaption>Các thành phần từ Flux và ECK operator tới ba node Elasticsearch, volume riêng và snapshot ra S3. <span>Hình từ tài liệu thiết kế gốc, chú thích bằng tiếng Anh. Bấm để phóng to.</span></figcaption></figure>
 
 <h2>Từ Docker Compose lên Kubernetes</h2>
 <div class="tw"><table>
@@ -3299,6 +3262,7 @@ spec:
 
 <h2>Vòng đời dữ liệu</h2>
 <p>Mỗi workspace ghi vào một <b>data stream</b>: một đích ghi có tên, phía sau là chuỗi index do Elasticsearch tự quản lý. Hai cơ chế phối hợp:</p>
+<figure class="fig"><a class="zoom" href="img/data-stream-lifecycle.png" title="Bấm để phóng to"><img src="img/data-stream-lifecycle.png" alt="Vòng đời data stream: các index nền theo thời gian, rollover và xóa bằng ILM" width="2600" height="1007" loading="lazy"></a><figcaption>Data stream, rollover và ILM: index cũ chỉ đọc, index hiện tại nhận ghi, index quá hạn bị xóa. <span>Hình từ tài liệu thiết kế gốc, chú thích bằng tiếng Anh. Bấm để phóng to.</span></figcaption></figure>
 <ul>
 <li><b>Rollover:</b> đóng index hiện tại và mở index mới khi đạt giới hạn kích thước hoặc tuổi, giữ mỗi index ở cỡ dễ quản lý.</li>
 <li><b>Lifecycle policy (ILM):</b> xóa index khi quá thời gian lưu của workspace.</li>
@@ -3346,57 +3310,8 @@ PUT _slm/policy/daily
 <h1>OpenTelemetry Collector và Operator</h1>
 <p class="lead">Collector nhận, xử lý và chuyển tiếp dữ liệu quan sát (log, metric, trace). Trong ví dụ này nó nhận lô log từ shipper (như Fluent Bit) và ghi sang Elasticsearch.</p>
 
-<h2>Luồng log qua Collector</h2>
-<svg class="dg" viewBox="0 0 760 392" role="img" aria-label="Luồng log: shipper gửi HTTPS tới Traefik, Traefik chạy forwardAuth (Redis, PostgreSQL), xóa header Authorization rồi chuyển HTTP tới Service của Collector; các Pod Collector là StatefulSet với hàng đợi trên đĩa riêng và ghi HTTPS sang Elasticsearch">
-  <defs><marker id="ar-ot" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--blue)"/></marker></defs>
-  <rect class="box" x="20" y="16" width="150" height="50" rx="6"/>
-  <text x="95.0" y="37.0" text-anchor="middle">Log shipper</text>
-  <text x="95.0" y="54.0" text-anchor="middle">Fluent Bit</text>
-  <rect class="box" x="215" y="8" width="210" height="66" rx="6"/>
-  <text x="320.0" y="28.5" text-anchor="middle">Traefik IngressRoute</text>
-  <text x="320.0" y="45.5" text-anchor="middle">forwardAuth, xóa Authorization</text>
-  <text x="320.0" y="62.5" text-anchor="middle">rateLimit (tùy chọn)</text>
-  <line class="ln" x1="170" y1="41" x2="215" y2="41" marker-end="url(#ar-ot)"/>
-  <text x="192" y="32" text-anchor="middle" class="sm">HTTPS</text>
-  <rect class="box" x="480" y="16" width="120" height="50" rx="6"/>
-  <text x="540.0" y="37.0" text-anchor="middle">Redis</text>
-  <text x="540.0" y="54.0" text-anchor="middle">cache khóa</text>
-  <rect class="box" x="635" y="16" width="105" height="50" rx="6"/>
-  <text x="687.5" y="45.5" text-anchor="middle">PostgreSQL</text>
-  <line class="ln" x1="425" y1="41" x2="480" y2="41" marker-end="url(#ar-ot)"/>
-  <text x="452" y="32" text-anchor="middle" class="sm">auth</text>
-  <line class="ln" x1="600" y1="41" x2="635" y2="41" marker-end="url(#ar-ot)"/>
-  <text x="618" y="32" text-anchor="middle" class="sm">miss</text>
-  <rect class="zone" x="20" y="104" width="720" height="190" rx="8"/>
-  <text x="34" y="125" class="zt">Cluster: Collector (StatefulSet)</text>
-  <text x="726" y="125" text-anchor="end" class="sm">số replica cố định, không dùng HPA</text>
-  <line class="ln" x1="320" y1="74" x2="320" y2="128" marker-end="url(#ar-ot)"/>
-  <text x="330" y="98" class="sm">HTTP</text>
-  <rect class="box" x="250" y="128" width="140" height="34" rx="6"/>
-  <text x="320.0" y="149.5" text-anchor="middle">Service</text>
-  <rect class="pod" x="34" y="202" width="220" height="66" rx="6"/>
-  <text x="144.0" y="222.5" text-anchor="middle">Collector 0</text>
-  <text x="144.0" y="239.5" text-anchor="middle">hàng đợi gửi trên đĩa</text>
-  <text x="144.0" y="256.5" text-anchor="middle">PVC riêng</text>
-  <line class="ln" x1="320" y1="162" x2="144" y2="202" marker-end="url(#ar-ot)"/>
-  <rect class="pod" x="270" y="202" width="220" height="66" rx="6"/>
-  <text x="380.0" y="222.5" text-anchor="middle">Collector 1</text>
-  <text x="380.0" y="239.5" text-anchor="middle">hàng đợi gửi trên đĩa</text>
-  <text x="380.0" y="256.5" text-anchor="middle">PVC riêng</text>
-  <line class="ln" x1="320" y1="162" x2="380" y2="202" marker-end="url(#ar-ot)"/>
-  <rect class="pod" x="506" y="202" width="220" height="66" rx="6"/>
-  <text x="616.0" y="222.5" text-anchor="middle">Collector 2</text>
-  <text x="616.0" y="239.5" text-anchor="middle">hàng đợi gửi trên đĩa</text>
-  <text x="616.0" y="256.5" text-anchor="middle">PVC riêng</text>
-  <line class="ln" x1="320" y1="162" x2="616" y2="202" marker-end="url(#ar-ot)"/>
-  <rect class="box" x="250" y="328" width="260" height="44" rx="6"/>
-  <text x="380.0" y="346.0" text-anchor="middle">Elasticsearch</text>
-  <text x="380.0" y="363.0" text-anchor="middle">ghi qua HTTPS</text>
-  <line class="ln" x1="144" y1="268" x2="380" y2="328" marker-end="url(#ar-ot)"/>
-  <line class="ln" x1="380" y1="268" x2="380" y2="328" marker-end="url(#ar-ot)"/>
-  <line class="ln" x1="616" y1="268" x2="380" y2="328" marker-end="url(#ar-ot)"/>
-</svg>
-
+<h2>Kiến trúc đích</h2>
+<figure class="fig"><a class="zoom" href="img/otel-collector-architecture.png" title="Bấm để phóng to"><img src="img/otel-collector-architecture.png" alt="Kiến trúc OpenTelemetry Collector gateway: ingress Traefik với middleware, các Pod gateway, volume hàng đợi và Elasticsearch" width="1914" height="1192" loading="lazy"></a><figcaption>Từ log shipper qua Traefik (forwardAuth, xóa header, rateLimit) tới các Pod Collector và Elasticsearch. <span>Hình từ tài liệu thiết kế gốc, chú thích bằng tiếng Anh. Bấm để phóng to.</span></figcaption></figure>
 
 <h2>Hiện trạng và vấn đề</h2>
 <ul>
@@ -3503,56 +3418,7 @@ spec:
 <p class="lead">OpenSandbox là dịch vụ mã nguồn mở (Apache-2.0) tạo môi trường cô lập, sống ngắn theo yêu cầu và chèn một daemon thực thi lệnh nhỏ (<code>execd</code>) vào từng môi trường. Mọi thứ chạy trong sandbox phải coi là code không tin cậy, ví dụ code do LLM sinh ra hay test trình duyệt tự động.</p>
 
 <h2>Kiến trúc tổng quan</h2>
-<svg class="dg" viewBox="0 0 760 424" role="img" aria-label="Kiến trúc OpenSandbox: client gọi Server ở namespace opensandbox; Server tạo BatchSandbox qua API server; Controller ở namespace opensandbox-system tạo Pod sandbox ở namespace opensandbox-workloads trên node sandbox chạy gVisor; client gọi thẳng execd trên Pod bằng token">
-  <defs><marker id="ar-sb" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--blue)"/></marker></defs>
-  <rect class="box" x="20" y="16" width="190" height="44" rx="6"/>
-  <text x="115.0" y="34.0" text-anchor="middle">Client ứng dụng</text>
-  <text x="115.0" y="51.0" text-anchor="middle">trong cluster</text>
-  <rect class="zone" x="20" y="92" width="210" height="152" rx="8"/>
-  <text x="34" y="113" class="zt">ns opensandbox</text>
-  <rect class="box" x="34" y="124" width="182" height="76" rx="6"/>
-  <text x="125.0" y="149.5" text-anchor="middle">Server OpenSandbox</text>
-  <text x="125.0" y="166.5" text-anchor="middle">API key, tạo BatchSandbox</text>
-  <text x="125.0" y="183.5" text-anchor="middle">(không chuyển tiếp lệnh)</text>
-  <rect class="zone" x="275" y="92" width="210" height="152" rx="8"/>
-  <text x="289" y="113" class="zt">Kubernetes API server</text>
-  <rect class="box" x="289" y="124" width="182" height="76" rx="6"/>
-  <text x="380.0" y="149.5" text-anchor="middle">Kiểm tra lần 1</text>
-  <text x="380.0" y="166.5" text-anchor="middle">RBAC trong ns workloads</text>
-  <text x="380.0" y="183.5" text-anchor="middle">admission policy, quota</text>
-  <rect class="zone" x="530" y="92" width="210" height="152" rx="8"/>
-  <text x="544" y="113" class="zt">ns opensandbox-system</text>
-  <rect class="box" x="544" y="124" width="182" height="76" rx="6"/>
-  <text x="635.0" y="149.5" text-anchor="middle">Controller</text>
-  <text x="635.0" y="166.5" text-anchor="middle">theo dõi BatchSandbox</text>
-  <text x="635.0" y="183.5" text-anchor="middle">tạo Pod sandbox</text>
-  <line class="ln" x1="200" y1="60" x2="200" y2="124" marker-end="url(#ar-sb)"/>
-  <line class="ln" x1="216" y1="162" x2="289" y2="162" marker-end="url(#ar-sb)"/>
-  <line class="ln" x1="471" y1="162" x2="544" y2="162" marker-end="url(#ar-sb)"/>
-  <rect class="zone" x="20" y="270" width="720" height="142" rx="8"/>
-  <text x="34" y="400" class="zt">ns opensandbox-workloads · node sandbox (taint) · gVisor (runsc)</text>
-  <line class="ln" x1="635" y1="200" x2="635" y2="256"/>
-  <line class="ln" x1="140" y1="256" x2="635" y2="256"/>
-  <line class="ln" x1="140" y1="256" x2="140" y2="296" marker-end="url(#ar-sb)"/>
-  <line class="ln" x1="370" y1="256" x2="370" y2="296" marker-end="url(#ar-sb)"/>
-  <line class="ln" x1="600" y1="256" x2="600" y2="296" marker-end="url(#ar-sb)"/>
-  <text x="646" y="232" class="sm">tạo Pod</text>
-  <rect class="warnbox" x="40" y="296" width="200" height="64" rx="6"/>
-  <text x="140.0" y="315.5" text-anchor="middle">Pod sandbox 1</text>
-  <text x="140.0" y="332.5" text-anchor="middle">execd + code không tin cậy</text>
-  <text x="140.0" y="349.5" text-anchor="middle">không có API token</text>
-  <rect class="warnbox" x="270" y="296" width="200" height="64" rx="6"/>
-  <text x="370.0" y="315.5" text-anchor="middle">Pod sandbox 2</text>
-  <text x="370.0" y="332.5" text-anchor="middle">execd + code không tin cậy</text>
-  <text x="370.0" y="349.5" text-anchor="middle">không có API token</text>
-  <rect class="warnbox" x="500" y="296" width="200" height="64" rx="6"/>
-  <text x="600.0" y="315.5" text-anchor="middle">Pod sandbox N</text>
-  <text x="600.0" y="332.5" text-anchor="middle">execd + code không tin cậy</text>
-  <text x="600.0" y="349.5" text-anchor="middle">không có API token</text>
-  <path class="ln dash" d="M210 38 H752 V328 H702" marker-end="url(#ar-sb)"/>
-  <text x="480" y="30" text-anchor="middle" class="sm">execd + token: client gọi thẳng Pod sandbox</text>
-</svg>
-
+<figure class="fig"><a class="zoom" href="img/opensandbox-architecture.png" title="Bấm để phóng to"><img src="img/opensandbox-architecture.png" alt="Kiến trúc OpenSandbox trên Kubernetes: client, server, control plane, controller, node sandbox và GitOps" width="1746" height="1195" loading="lazy"></a><figcaption>Các thành phần, namespace, node sandbox và đường giao hàng qua GitOps. <span>Hình từ tài liệu thiết kế gốc, chú thích bằng tiếng Anh. Bấm để phóng to.</span></figcaption></figure>
 
 <h2>Vấn đề với mô hình Docker</h2>
 <div class="tw"><table>
@@ -3607,6 +3473,7 @@ scheduling:
   <text x="380.0" y="178.0" text-anchor="middle">Code không tin cậy (root bên trong sandbox)</text>
   <text x="380.0" y="195.0" text-anchor="middle">không chạm tới kernel của host</text>
 </svg>
+<figure class="fig"><a class="zoom" href="img/opensandbox-security.png" title="Bấm để phóng to"><img src="img/opensandbox-security.png" alt="Thiết kế bảo mật OpenSandbox: các lớp kiểm tra theo từng bước của một yêu cầu" width="1787" height="1215" loading="lazy"></a><figcaption>Các điểm kiểm tra trên đường đi của một yêu cầu: Role, admission policy, quota, NetworkPolicy; đường xanh là được phép, đường đỏ là bị chặn. <span>Hình từ tài liệu thiết kế gốc, chú thích bằng tiếng Anh. Bấm để phóng to.</span></figcaption></figure>
 
 <div class="tw"><table>
 <tr><th>Kiểm soát</th><th>Cách áp dụng</th><th>Rủi ro được giải quyết</th></tr>
@@ -3827,6 +3694,19 @@ $('#theme').addEventListener('click',()=>{
   root.dataset.theme=dark?'light':'dark';
   try{localStorage.setItem('k8s-theme',root.dataset.theme)}catch(e){}
 });
+
+/* lightbox for figures */
+(function(){
+  const lb=$('#lb'),im=$('#lbimg'),cap=$('#lbcap'),z=$('#lbz');
+  const open=a=>{const t=a.querySelector('img');im.src=a.getAttribute('href');im.alt=t.alt;cap.textContent=t.alt;im.classList.remove('full');z.textContent='Cỡ thật';lb.classList.add('open');$('#lbx').focus()};
+  const close=()=>{lb.classList.remove('open');im.removeAttribute('src')};
+  const tog=()=>{const f=im.classList.toggle('full');z.textContent=f?'Vừa khung':'Cỡ thật'};
+  document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a.zoom');if(a){e.preventDefault();open(a)}});
+  $('#lbx').addEventListener('click',close);z.addEventListener('click',tog);im.addEventListener('click',tog);
+  lb.addEventListener('click',e=>{if(e.target===lb||e.target.classList.contains('st'))close()});
+  addEventListener('keydown',e=>{if(e.key==='Escape'&&lb.classList.contains('open'))close()});
+  addEventListener('hashchange',close);
+})();
 
 /* routing: only a plain #page-id is used in the hash */
 addEventListener('hashchange',()=>show(location.hash.slice(1)));
