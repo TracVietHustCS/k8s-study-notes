@@ -168,6 +168,7 @@ footer{border-top:1px solid var(--line);margin-top:48px;padding-top:16px;font-si
     <a href="#workloads">Workloads</a>
     <a href="#services">Networking</a>
     <a href="#kubectl">kubectl</a>
+    <a href="#setup-plan">Setup on-prem</a>
     <a href="https://github.com/TracVietHustCS" target="_blank" rel="noopener">@TracVietHustCS</a>
   </nav>
   <span class="sp"></span>
@@ -1905,6 +1906,1394 @@ kubectl get nodes</code></pre>
 <tr><td>Hạ tầng sẵn có là Nutanix</td><td>NKE hoặc NKP</td></tr>
 </table></div>
 <div class="callout tip"><b>Mẹo</b><p>Dù chọn nền tảng nào, kiến thức cốt lõi (Pod, Service, RBAC, storage, mạng) là như nhau. Điều khác biệt là ai chịu trách nhiệm upgrade, backup etcd, và chi phí vận hành. Hãy chọn theo năng lực của đội chứ không theo độ “hot” của công cụ.</p></div>
+</article>
+
+<!-- ============ SETUP: PLAN ============ -->
+<article class="page" data-id="setup-plan" data-group="Setup K8s on-prem" data-title="Chọn nền tảng và kiến trúc đích" hidden>
+<h1>Dựng Kubernetes on-premises: chọn nền tảng và kiến trúc đích</h1>
+<p class="lead">Quy trình dựng một nền tảng Kubernetes on-prem từ lúc chọn công nghệ đến lúc vận hành, dựa trên một bản đề xuất thực tế dùng RKE2 + Rancher. Nội dung đã được khái quát hóa, tên miền, IP và hệ thống cụ thể thay bằng ví dụ.</p>
+
+<div class="callout"><b>Cách đọc nhóm này</b><p>Nhóm “Setup K8s on-prem” trả lời câu hỏi <i>dựng cluster thế nào</i>: kế hoạch, hạ tầng, chuẩn bị node, cài RKE2, cài Rancher, GitOps, vận hành. Nhóm “Open-source tools” đi sâu vào từng công cụ chạy trên cluster đó (Traefik, cert-manager, Vault Secrets Operator, Prometheus, Velero, ECK, OpenTelemetry, OpenSandbox…).</p></div>
+
+<h2>Chọn nền tảng</h2>
+<p>Ba phương án thường được cân nhắc cho môi trường on-prem có hệ thống nội bộ và không ra internet:</p>
+<div class="tw"><table>
+<tr><th>Phương án</th><th>Điểm mạnh</th><th>Hạn chế</th><th>Đánh giá</th></tr>
+<tr><td><b>RKE2 + Rancher (SUSE)</b></td><td>Chạy trên VM sẵn có. Có profile hardening CIS tích hợp. Thiết kế cho mạng không có internet (air-gap). Miễn phí, chi phí chỉ là VM. Rancher cho một console, SSO và nâng cấp cho mọi cluster.</td><td>Đội của bạn tự vận hành cluster (upgrade, backup).</td><td><b>Khuyến nghị</b></td></tr>
+<tr><td>Red Hat OpenShift</td><td>Nền tảng doanh nghiệp đầy đủ, hỗ trợ vendor mạnh.</td><td>Tính phí theo core, footprint nặng. Có resource riêng (Routes, Security Context Constraints) nên phải sửa lại cấu hình GitOps hiện có.</td><td>Không phù hợp ở quy mô nhỏ</td></tr>
+<tr><td>Amazon EKS</td><td>Control plane được quản lý, không phải vận hành cluster.</td><td>Là dịch vụ cloud công cộng: dữ liệu ra khỏi mạng nội bộ, trong khi ứng dụng phụ thuộc hệ thống nội bộ (registry, Vault, SSO, database).</td><td>Không phù hợp</td></tr>
+</table></div>
+
+<h2>Vì sao RKE2 + Rancher</h2>
+<ul>
+<li><b>On-prem trên hạ tầng sẵn có.</b> Đội đã từng chạy Kubernetes on-prem nên mô hình vận hành quen thuộc.</li>
+<li><b>Không tốn license để bắt đầu.</b> RKE2 và Rancher là mã nguồn mở, chi phí duy nhất là VM.</li>
+<li><b>Có đường nâng cấp có hỗ trợ.</b> Rancher Prime (gói thương mại của SUSE) dùng cùng mã nguồn. Khi cần hỗ trợ 24x7, chuyển cluster hiện có sang Prime bằng cách đổi nguồn chart, không phải dựng lại.</li>
+<li><b>An toàn và sẵn sàng cho mạng đóng.</b> Profile CIS, hỗ trợ SELinux, cài từ package nội bộ và registry nội bộ.</li>
+<li><b>Giữ nguyên cách triển khai hiện tại.</b> Flux GitOps, Traefik ingress và Vault không phải đổi.</li>
+</ul>
+
+<h2>Kiến trúc đích</h2>
+<svg class="dg" viewBox="0 0 760 372" role="img" aria-label="Kiến trúc đích: người dùng và bastion đi qua load balancer L4 tới management cluster Rancher, cluster workload dev/stg và cluster workload production; bên dưới là toolchain node và backup storage S3">
+  <defs><marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--blue)"/></marker></defs>
+  <rect class="box" x="20" y="12" width="200" height="44" rx="6"/><text x="120" y="39" text-anchor="middle">Người dùng, log shipper</text>
+  <rect class="box" x="520" y="12" width="220" height="44" rx="6"/><text x="630" y="39" text-anchor="middle">Bastion: kubectl, helm, flux, ansible</text>
+  <line class="ln" x1="120" y1="56" x2="120" y2="86" marker-end="url(#ar2)"/>
+  <line class="ln" x1="630" y1="56" x2="630" y2="86" marker-end="url(#ar2)"/>
+  <rect class="zone" x="20" y="88" width="720" height="40" rx="6"/>
+  <text x="380" y="113" text-anchor="middle" class="zt">Load balancer L4 (F5 hoặc tương đương): VIP API 6443/9345, VIP ứng dụng 80/443, TCP passthrough</text>
+  <line class="ln" x1="135" y1="128" x2="135" y2="156" marker-end="url(#ar2)"/>
+  <line class="ln" x1="380" y1="128" x2="380" y2="156" marker-end="url(#ar2)"/>
+  <line class="ln" x1="625" y1="128" x2="625" y2="156" marker-end="url(#ar2)"/>
+  <rect class="zone" x="20" y="158" width="230" height="124" rx="8"/><text class="zt" x="34" y="180">Management cluster</text>
+  <rect class="box" x="34" y="192" width="202" height="34" rx="5"/><text x="135" y="214" text-anchor="middle">Rancher (3 node)</text>
+  <text x="34" y="250">Một console, SSO, nâng cấp</text><text x="34" y="268">cho các cluster workload</text>
+  <rect class="zone" x="265" y="158" width="230" height="124" rx="8"/><text class="zt" x="279" y="180">Workload dev/stg</text>
+  <rect class="box" x="279" y="192" width="202" height="34" rx="5"/><text x="380" y="214" text-anchor="middle">3 control plane + 5 worker</text>
+  <text x="279" y="250">+ 1 node sandbox (gVisor)</text><text x="279" y="268">Tách dev/stg bằng namespace</text>
+  <rect class="zone" x="510" y="158" width="230" height="124" rx="8"/><text class="zt" x="524" y="180">Workload production</text>
+  <rect class="box" x="524" y="192" width="202" height="34" rx="5"/><text x="625" y="214" text-anchor="middle">3 control plane + 5 worker</text>
+  <text x="524" y="250">+ 2 node sandbox (gVisor)</text><text x="524" y="268">Cluster riêng, đổi sau dev/stg</text>
+  <line class="ln dash" x1="135" y1="282" x2="135" y2="310" marker-end="url(#ar2)"/>
+  <line class="ln dash" x1="380" y1="282" x2="380" y2="310" marker-end="url(#ar2)"/>
+  <line class="ln dash" x1="625" y1="282" x2="625" y2="310" marker-end="url(#ar2)"/>
+  <rect class="box" x="20" y="312" width="350" height="46" rx="6"/><text x="195" y="340" text-anchor="middle">Toolchain: registry, Git, Vault (đã có sẵn)</text>
+  <rect class="box" x="390" y="312" width="350" height="46" rx="6"/><text x="565" y="340" text-anchor="middle">Backup storage S3 (ngoài cluster)</text>
+</svg>
+<div class="tw"><table>
+<tr><th>Vùng</th><th>Thành phần</th><th>Vai trò</th></tr>
+<tr><td>Người dùng và vận hành</td><td>Người dùng, log shipper, bastion host</td><td>Người dùng vào ứng dụng qua load balancer. DevOps quản lý mọi cluster từ một bastion (kubectl, Helm, Flux CLI, Ansible) và qua console Rancher.</td></tr>
+<tr><td>Load balancer</td><td>F5 hoặc LB layer-4 khác của công ty</td><td>Cho mỗi cluster các địa chỉ cố định: một cho API, một cho ứng dụng. Chỉ chuyển TCP, TLS kết thúc ở Traefik trong cluster.</td></tr>
+<tr><td>Management cluster</td><td>3 node chạy Rancher</td><td>Một console cho các cluster workload: sức khỏe, workload, log, phân quyền với SSO, nâng cấp Kubernetes. Rancher ngừng thì ứng dụng vẫn chạy.</td></tr>
+<tr><td>Workload clusters</td><td>Dev/stg và production</td><td>Mỗi cluster có 3 control plane, 5 worker và node sandbox riêng. Dev và staging dùng chung một cluster, tách bằng namespace, quota và network policy. Production là cluster riêng.</td></tr>
+<tr><td>Toolchain node</td><td>Registry/artifact repo (ví dụ Nexus, Harbor), Git server, Vault</td><td>Nguồn của mọi image, chart, cấu hình và secret. Cluster không ra internet.</td></tr>
+<tr><td>Backup storage</td><td>Object storage tương thích S3</td><td>Bản sao ngoài cluster của etcd, Elasticsearch và volume ứng dụng.</td></tr>
+</table></div>
+
+<h2>Các quyết định thiết kế chính</h2>
+<ul>
+<li><b>Hai cluster workload.</b> Dev/stg dùng chung, production riêng. Mọi thay đổi, kể cả nâng cấp Kubernetes, áp dụng cho dev/stg trước.</li>
+<li><b>Ba control-plane node mỗi cluster.</b> etcd cần đa số để ghi, ba node chịu được mất một node.</li>
+<li><b>Cilium</b> làm lớp mạng, kèm network policy cho mọi namespace ứng dụng.</li>
+<li><b>Traefik</b> làm ingress, cài và quản lý phiên bản qua GitOps thay vì dùng bản đi kèm RKE2.</li>
+<li><b>Flux GitOps</b> cho mọi thứ sau khi cài cluster: add-on nền tảng và ứng dụng đều khai báo trong một repo GitOps.</li>
+<li><b>cert-manager</b> tự gia hạn chứng chỉ HTTPS bằng cách nối với CA của công ty (cần xác nhận CA hỗ trợ). <b>Vault Secrets Operator</b> chuyển secret từ Vault vào cluster.</li>
+<li><b>Mỗi cluster một bản OpenSandbox</b> (nếu có workload chạy code không tin cậy), vì custom resource của nó có phạm vi toàn cluster.</li>
+<li><b>Giám sát</b> bằng Prometheus, Grafana, Alertmanager trong mỗi cluster, xem được ngay trong console Rancher.</li>
+</ul>
+
+<h2>Add-on tùy chọn cho giai đoạn sau</h2>
+<p>Không nằm trong bản dựng ban đầu, thêm qua GitOps khi cần mà không đổi hạ tầng:</p>
+<ul>
+<li><b>Kyverno:</b> luật cluster viết bằng YAML (image chỉ từ registry nội bộ, bắt buộc runtime gVisor cho sandbox, default-deny NetworkPolicy cho namespace mới).</li>
+<li><b>Hubble</b> (một phần của Cilium): xem Pod nào nói chuyện với Pod nào và kết nối nào bị policy chặn. Bật trong cấu hình Cilium, không cài riêng.</li>
+<li><b>VPA ở chế độ khuyến nghị</b> (hoặc Goldilocks): đo CPU, RAM thật và gợi ý resource, không tự đổi Pod đang chạy.</li>
+<li><b>Reloader:</b> tự restart Pod khi Secret hoặc ConfigMap mà nó dùng thay đổi (ví dụ sau khi chứng chỉ được gia hạn).</li>
+<li><b>OpenCost:</b> báo cáo chi phí theo namespace hoặc ứng dụng. Chỉ đáng dùng nếu có chargeback, vì giá on-prem phải nhập tay.</li>
+</ul>
+
+<h2>Ma trận phiên bản (ví dụ tháng 10/2026)</h2>
+<div class="tw"><table>
+<tr><th>Thành phần</th><th>Phiên bản ví dụ</th><th>Ghi chú</th></tr>
+<tr><td>Hệ điều hành</td><td>RHEL 9.x hoặc Rocky Linux 9.x</td><td>Theo bảng support matrix của SUSE cho phiên bản RKE2 bạn chọn</td></tr>
+<tr><td>RKE2 (Kubernetes)</td><td>v1.36.x</td><td>Kiểm tra mốc hết hỗ trợ của phiên bản Kubernetes</td></tr>
+<tr><td>Rancher</td><td>v2.15.x</td><td>Phải hỗ trợ phiên bản RKE2 bạn dùng</td></tr>
+<tr><td>containerd, etcd, Cilium</td><td>Đi kèm RKE2</td><td>Không chọn riêng</td></tr>
+<tr><td>Traefik</td><td>Helm chart 41.x (Traefik 3.7)</td><td></td></tr>
+<tr><td>cert-manager</td><td>v1.21.x</td><td></td></tr>
+<tr><td>Flux</td><td>v2.9.x</td><td>Bản cũ không hỗ trợ Kubernetes mới</td></tr>
+<tr><td>Vault Secrets Operator</td><td>v1.5.x</td><td></td></tr>
+</table></div>
+<div class="callout warn"><b>Cẩn thận</b><p>RKE2, Rancher và Flux phải đi cùng nhau: một minor cũ của bất kỳ cái nào có thể không hỗ trợ phiên bản Kubernetes mới. Số phiên bản ở trên chỉ là ví dụ, luôn kiểm tra support matrix của từng hãng tại thời điểm cài, và dùng patch mới nhất của cùng minor.</p></div>
+
+<h2>Lộ trình thực hiện</h2>
+<ol>
+<li>Chốt các quyết định mở (node access, CIDR, chứng chỉ, backup storage, storage CSI) trước khi cài.</li>
+<li>Hạ tầng: VM, IP, DNS, load balancer, firewall (trang tiếp theo).</li>
+<li>Chuẩn bị node: hệ điều hành và các thiết lập bắt buộc, bằng Ansible.</li>
+<li>Cài RKE2: server đầu tiên, join thêm server, rồi worker.</li>
+<li>Cài Rancher trên management cluster và đăng ký các cluster workload.</li>
+<li>Bootstrap Flux, rồi để Flux cài add-on: Traefik, cert-manager, Vault Secrets Operator, giám sát.</li>
+<li>Dựng guardrail: namespace, Pod Security, NetworkPolicy, quota.</li>
+<li>Bật backup etcd và thử khôi phục trên dev/stg.</li>
+<li>Di chuyển ứng dụng từng cái một, ứng dụng nền (database, operator) trước.</li>
+</ol>
+</article>
+
+<!-- ============ SETUP: INFRA ============ -->
+<article class="page" data-id="setup-infra" data-group="Setup K8s on-prem" data-title="Yêu cầu hạ tầng" hidden>
+<h1>Yêu cầu hạ tầng: VM, mạng, load balancer, firewall, storage</h1>
+<p class="lead">Danh sách đầy đủ những gì nền tảng cần từ đội hạ tầng. Làm thành một tài liệu duy nhất để đội hạ tầng chuẩn bị một lần.</p>
+
+<h2>Máy ảo</h2>
+<p>Ví dụ cho một nền tảng gồm management cluster, cluster dev/stg và cluster production:</p>
+<div class="tw"><table>
+<tr><th>Vai trò</th><th>SL</th><th>vCPU</th><th>RAM</th><th>Đĩa OS</th><th>Mục đích</th></tr>
+<tr><td>Management (Rancher)</td><td>3</td><td>4</td><td>16 GiB</td><td>100 GiB</td><td>Rancher và control plane riêng</td></tr>
+<tr><td>Dev/stg control plane</td><td>3</td><td>4</td><td>16 GiB</td><td>100 GiB SSD</td><td>Kubernetes API và etcd</td></tr>
+<tr><td>Dev/stg worker</td><td>5</td><td>8</td><td>32 GiB</td><td>200 GiB</td><td>Workload dev, staging; hai node chạy thêm Traefik</td></tr>
+<tr><td>Dev/stg sandbox</td><td>1</td><td>16</td><td>64 GiB</td><td>300 GiB</td><td>Pod sandbox dưới gVisor</td></tr>
+<tr><td>Prod control plane</td><td>3</td><td>4</td><td>16 GiB</td><td>100 GiB SSD</td><td>Kubernetes API và etcd</td></tr>
+<tr><td>Prod worker</td><td>5</td><td>16</td><td>64 GiB</td><td>200 GiB</td><td>Workload production; hai node chạy thêm Traefik</td></tr>
+<tr><td>Prod sandbox</td><td>2</td><td>16</td><td>64 GiB</td><td>300 GiB</td><td>Sandbox dưới gVisor; hai node để sống sót khi patch hoặc mất một node</td></tr>
+<tr><td>Bastion</td><td>1</td><td>2</td><td>8 GiB</td><td>200 GiB</td><td>Quản trị cluster, chứa gói cài đặt</td></tr>
+<tr><td><b>Tổng</b></td><td><b>23</b></td><td><b>206</b></td><td><b>824 GiB</b></td><td><b>khoảng 4 TB</b></td><td></td></tr>
+</table></div>
+<ul>
+<li><b>Khác máy vật lý (anti-affinity ở mức hypervisor):</b> các VM cùng vai trò phải nằm trên host vật lý khác nhau: 3 control plane của mỗi cluster, 2 sandbox production, 2 ingress worker. Cần tối thiểu 3 host vật lý.</li>
+<li><b>Đĩa nhanh cho control plane:</b> etcd rất nhạy với độ trễ ghi, dùng đĩa SSD.</li>
+<li><b>RAM trước CPU:</b> nếu thiếu tài nguyên, giảm vCPU trước. Elasticsearch và giám sát bị giới hạn bởi RAM, CPU đo thực tế thường thấp.</li>
+<li>Volume dữ liệu ứng dụng tách khỏi đĩa OS (qua CSI).</li>
+</ul>
+
+<h2>Địa chỉ mạng và DNS</h2>
+<div class="tw"><table>
+<tr><th>Hạng mục</th><th>Số lượng</th><th>Mục đích</th></tr>
+<tr><td>IP tĩnh</td><td>Một cho mỗi VM (23)</td><td>Địa chỉ node</td></tr>
+<tr><td>Địa chỉ API (VIP)</td><td>Một cho mỗi cluster (3)</td><td>API cho quản trị viên và cho node join cluster</td></tr>
+<tr><td>Địa chỉ ứng dụng (VIP)</td><td>Một cho mỗi cluster workload (2), thêm một cho Rancher</td><td>Toàn bộ traffic ứng dụng; console Rancher</td></tr>
+<tr><td>Bản ghi DNS</td><td></td><td><code>api.CLUSTER.example.com</code> về địa chỉ API; <code>*.dev.example.com</code>, <code>*.stg.example.com</code> về địa chỉ ứng dụng dev/stg; <code>*.prod.example.com</code> về địa chỉ production; <code>rancher.example.com</code> về địa chỉ Rancher</td></tr>
+<tr><td>DNS và NTP</td><td></td><td>Phân giải tên và đồng bộ giờ cho mọi node</td></tr>
+</table></div>
+
+<h2>Load balancer</h2>
+<p>Mỗi cluster cần địa chỉ cố định phía trước các node. Dùng load balancer của công ty ở <b>layer 4</b> (ví dụ F5 virtual server kiểu FastL4). TCP đi nguyên vẹn, TLS kết thúc ở Traefik trong cluster nên không cần giữ chứng chỉ trên load balancer.</p>
+<div class="tw"><table>
+<tr><th>Địa chỉ</th><th>Cổng</th><th>Thành viên pool</th><th>Health check</th></tr>
+<tr><td>API</td><td>6443</td><td>3 control plane, cổng 6443</td><td>TCP (hoặc HTTPS <code>/readyz</code>)</td></tr>
+<tr><td>API</td><td>9345</td><td>3 control plane, cổng 9345</td><td>TCP (hoặc HTTPS <code>/ping</code>)</td></tr>
+<tr><td>Ứng dụng</td><td>443</td><td>2 ingress worker, cổng 30443</td><td>TCP</td></tr>
+<tr><td>Ứng dụng</td><td>80</td><td>2 ingress worker, cổng 30080</td><td>TCP</td></tr>
+<tr><td>Rancher</td><td>443 và 80</td><td>3 node Rancher, cổng 30443 và 30080</td><td>TCP</td></tr>
+</table></div>
+<ul>
+<li>Pool chỉ chứa node cố định (control plane và 2 ingress worker). Thêm bớt worker ứng dụng không cần sửa load balancer.</li>
+<li>Địa chỉ ứng dụng nên dùng <b>PROXY protocol</b> để Traefik thấy IP thật của client (cho access log và rate limit). Traefik chỉ chấp nhận header PROXY từ địa chỉ của load balancer. Cần xác nhận load balancer hỗ trợ.</li>
+<li><b>Phương án thay thế</b> nếu không dùng được load balancer: <b>kube-vip</b> cho địa chỉ API và <b>MetalLB</b> cho ứng dụng. Cách này cần mọi node chung một mạng layer-2 và một dải IP dành riêng.</li>
+</ul>
+
+<h2>Firewall</h2>
+<p>Các kết nối cần cho phép (TCP trừ khi ghi khác). Không node nào cần internet.</p>
+<h3>Trong mỗi cluster</h3>
+<div class="tw"><table>
+<tr><th>Cổng</th><th>Từ</th><th>Tới</th><th>Mục đích</th></tr>
+<tr><td>6443</td><td>Mọi node</td><td>Control plane</td><td>Kubernetes API</td></tr>
+<tr><td>9345</td><td>Mọi node</td><td>Control plane</td><td>Đăng ký node (RKE2 supervisor)</td></tr>
+<tr><td>2379-2381</td><td>Control plane</td><td>Control plane</td><td>etcd</td></tr>
+<tr><td>10250</td><td>Mọi node</td><td>Mọi node</td><td>kubelet</td></tr>
+<tr><td>8472 (UDP)</td><td>Mọi node</td><td>Mọi node</td><td>Mạng Pod (VXLAN của Cilium)</td></tr>
+<tr><td>4240 và ICMP</td><td>Mọi node</td><td>Mọi node</td><td>Health check của Cilium</td></tr>
+</table></div>
+<h3>Giữa các hệ thống</h3>
+<div class="tw"><table>
+<tr><th>Từ</th><th>Tới</th><th>Cổng</th><th>Mục đích</th></tr>
+<tr><td>Người dùng</td><td>Địa chỉ ứng dụng và Rancher</td><td>443 (80 redirect)</td><td>Ứng dụng và console Rancher</td></tr>
+<tr><td>Load balancer</td><td>Control plane</td><td>6443, 9345</td><td>Kubernetes API</td></tr>
+<tr><td>Load balancer</td><td>Ingress worker và node Rancher</td><td>30080, 30443</td><td>Ứng dụng và Rancher</td></tr>
+<tr><td>Bastion</td><td>Địa chỉ API của cả ba cluster</td><td>6443</td><td>Quản trị</td></tr>
+<tr><td>Bastion</td><td>Mọi node</td><td>22</td><td>Cấu hình node (Ansible)</td></tr>
+<tr><td>Node cluster workload</td><td>Địa chỉ Rancher</td><td>443</td><td>Đăng ký cluster với Rancher</td></tr>
+<tr><td>Mọi node</td><td>Toolchain: registry</td><td>443 và cổng registry</td><td>Image và Helm chart</td></tr>
+<tr><td>Mọi node</td><td>Toolchain: Git</td><td>443 hoặc 22</td><td>Cấu hình (Flux)</td></tr>
+<tr><td>Mọi node</td><td>Toolchain: Vault</td><td>8200</td><td>Secret</td></tr>
+<tr><td>Mọi node</td><td>API quản lý storage và mạng storage</td><td>Theo driver (ví dụ iSCSI 3260)</td><td>Tạo và gắn volume</td></tr>
+<tr><td>Mọi node</td><td>Backup storage</td><td>443</td><td>Backup (S3)</td></tr>
+<tr><td>Mọi node</td><td>SSO, database, Redis, các dịch vụ phụ thuộc</td><td>Như hiện tại</td><td>Phụ thuộc của ứng dụng</td></tr>
+<tr><td>Mọi node</td><td>DNS và NTP</td><td>53 (TCP/UDP), 123 (UDP)</td><td>Phân giải tên và giờ</td></tr>
+</table></div>
+
+<h2>Storage và backup</h2>
+<ul>
+<li><b>Block storage:</b> driver CSI cho hệ thống storage đã chọn, có storage class <b>RWO</b> hỗ trợ mở rộng volume, và một service account cho driver. Dung lượng ban đầu chủ yếu do Elasticsearch quyết định.</li>
+<li><b>Shared storage (tùy chọn):</b> storage class <b>RWX</b> cho phép chạy nhiều replica API cho ứng dụng chia sẻ file. Không có thì các thành phần đó chạy một replica.</li>
+<li><b>Backup storage:</b> object storage tương thích S3 nằm ngoài cả hai cluster, dùng cho snapshot etcd, snapshot Elasticsearch và backup volume. Cả ba công cụ ghi thẳng vào S3, và Velero chỉ hỗ trợ object storage.</li>
+<li><b>Ưu tiên:</b> object storage doanh nghiệp sẵn có do đội hạ tầng vận hành. <b>Thay thế:</b> một VM riêng chạy S3 tự host (ví dụ Garage), tách khỏi toolchain node để một sự cố không xóa cùng lúc cấu hình lẫn bản backup của nó.</li>
+<li>Mỗi cluster và mỗi mục đích một bucket với một credential riêng. Cluster dev/stg không được ghi vào bucket production. Với production nên có bản sao thứ hai ở địa điểm khác.</li>
+</ul>
+<div class="callout warn"><b>Cẩn thận</b><p>MinIO bản Community được ghi nhận là không còn được bảo trì tích cực tại thời điểm viết ghi chú, nên không được chọn trong thiết kế này. Kiểm tra lại tình trạng hiện tại trước khi quyết định.</p></div>
+
+<h2>Chứng chỉ và tài khoản</h2>
+<div class="tw"><table>
+<tr><th>Hạng mục</th><th>Mục đích</th></tr>
+<tr><td>Cấp chứng chỉ tự động từ CA công ty (CA trung gian, Vault PKI hoặc ACME server nội bộ)</td><td>cert-manager cấp và gia hạn chứng chỉ HTTPS. Nếu chỉ cấp tay được: chứng chỉ wildcard gia hạn thủ công mỗi năm và có giám sát hạn.</td></tr>
+<tr><td>Chứng chỉ CA công ty (phần công khai)</td><td>Node và Pod tin cậy để kết nối registry, Vault, SSO</td></tr>
+<tr><td>Tài khoản cho storage driver</td><td>Tạo và gắn volume</td></tr>
+<tr><td>Subscription hệ điều hành (nếu dùng RHEL)</td><td>Cập nhật và hỗ trợ OS. Không cần với Rocky Linux.</td></tr>
+</table></div>
+<div class="callout tip"><b>Checklist gửi đội hạ tầng</b><p>VM trên tối thiểu 3 host vật lý, OS đồng nhất kèm SSH sudo, IP tĩnh và DNS, virtual server và pool trên load balancer, rule firewall, driver block storage cùng S3 backup, chứng chỉ và tài khoản.</p></div>
+</article>
+
+<!-- ============ SETUP: NODE ============ -->
+<article class="page" data-id="setup-node" data-group="Setup K8s on-prem" data-title="Chuẩn bị node (OS)" hidden>
+<h1>Chuẩn bị node: hệ điều hành và thiết lập bắt buộc</h1>
+<p class="lead">Mọi node dùng cùng một hệ điều hành họ Red Hat 9 (RHEL 9, hoặc Rocky Linux 9 để tiết kiệm subscription). Các thiết lập dưới đây giống nhau cho cả hai và cần có trên mọi node, mỗi khi thêm hoặc dựng lại node.</p>
+
+<h2>Các thiết lập bắt buộc</h2>
+<div class="tw"><table>
+<tr><th>Thiết lập</th><th>Lý do</th></tr>
+<tr><td>Tắt swap</td><td>Kubernetes yêu cầu.</td></tr>
+<tr><td>Tắt firewalld, lọc traffic bằng firewall mạng</td><td>firewalld xung đột với rule do Cilium quản lý.</td></tr>
+<tr><td>NetworkManager bỏ qua các interface của Cilium</td><td>Nếu không NetworkManager có thể xóa route của Pod.</td></tr>
+<tr><td>SELinux ở chế độ enforcing, cài <code>container-selinux</code> và <code>rke2-selinux</code></td><td>Giữ SELinux bật khi chạy container.</td></tr>
+<tr><td>Đồng bộ giờ với NTP của công ty</td><td>etcd và chứng chỉ phụ thuộc giờ chính xác.</td></tr>
+<tr><td>Kernel parameter CIS và user <code>etcd</code> riêng</td><td>Yêu cầu của profile hardening CIS của RKE2.</td></tr>
+<tr><td>Gói client của storage driver (ví dụ iSCSI initiator)</td><td>Driver cần để gắn volume.</td></tr>
+<tr><td>Cấu hình registry trỏ về registry nội bộ</td><td>Node chỉ kéo image từ registry nội bộ.</td></tr>
+<tr><td>Kernel parameter cho ứng dụng, ví dụ <code>vm.max_map_count</code></td><td>Yêu cầu của Elasticsearch, thêm dần theo thời gian.</td></tr>
+<tr><td>Runtime gVisor (chỉ node sandbox)</td><td>Cô lập cho workload không tin cậy.</td></tr>
+</table></div>
+
+<h2>Lệnh tham khảo</h2>
+<pre><code># 1. Tắt swap
+swapoff -a
+sed -i '/ swap / s/^/#/' /etc/fstab
+
+# 2. Tắt firewalld
+systemctl disable --now firewalld
+
+# 3. NetworkManager bỏ qua interface của Cilium
+cat &gt; /etc/NetworkManager/conf.d/cilium.conf &lt;&lt;'EOF'
+[keyfile]
+unmanaged-devices=interface-name:cilium_*;interface-name:lxc*
+EOF
+systemctl reload NetworkManager
+
+# 4. SELinux enforcing
+getenforce                      # phải là Enforcing
+dnf install -y container-selinux
+
+# 5. Đồng bộ giờ
+dnf install -y chrony
+sed -i 's/^pool .*/server ntp.example.com iburst/' /etc/chrony.conf
+systemctl enable --now chronyd
+
+# 6. Yêu cầu của profile CIS (đường dẫn file sysctl có thể là /usr/share/rke2 hoặc /usr/local/share/rke2)
+useradd -r -c "etcd user" -s /sbin/nologin -M etcd -U
+cp -f /usr/share/rke2/rke2-cis-sysctl.conf /etc/sysctl.d/60-rke2-cis.conf
+
+# 7. Tham số kernel cho Elasticsearch
+echo 'vm.max_map_count=1048576' &gt; /etc/sysctl.d/90-elasticsearch.conf
+sysctl --system</code></pre>
+<p><code>rke2-selinux</code> được cài kèm RKE2 từ repo hoặc gói offline, xem trang cài RKE2.</p>
+
+<h2>Dùng Ansible, đừng làm tay</h2>
+<p>Các thiết lập này không phải việc làm một lần: mỗi thành phần nền tảng sẽ thêm yêu cầu riêng (<code>vm.max_map_count</code> cho Elasticsearch, thiết lập mạng cho Cilium, runtime gVisor trên node sandbox), và mỗi lần thêm hoặc dựng lại node đều cần lại. Hãy để Ansible playbook trong Git làm việc đó: mọi thay đổi được review, lặp lại được và đội hạ tầng nhìn thấy.</p>
+<pre><code># roles/k8s_node/tasks/main.yml (rút gọn)
+- name: Disable swap
+  ansible.posix.mount: {name: none, fstype: swap, state: absent}
+- ansible.builtin.command: swapoff -a
+- name: Stop and disable firewalld
+  ansible.builtin.systemd: {name: firewalld, state: stopped, enabled: false}
+- name: NetworkManager ignores Cilium interfaces
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/cilium.conf
+    content: |
+      [keyfile]
+      unmanaged-devices=interface-name:cilium_*;interface-name:lxc*
+  notify: reload NetworkManager
+- name: etcd user (CIS)
+  ansible.builtin.user: {name: etcd, system: true, shell: /sbin/nologin, create_home: false}
+- name: Kernel parameters
+  ansible.posix.sysctl: {name: vm.max_map_count, value: "1048576", sysctl_file: /etc/sysctl.d/90-elasticsearch.conf, reload: true}</code></pre>
+
+<h2>Phân chia trách nhiệm</h2>
+<ul>
+<li><b>Khuyến nghị:</b> đội hạ tầng sở hữu OS nền (cấp phát, patch, hardening), đội nền tảng K8s sở hữu các thiết lập riêng cho Kubernetes và áp bằng Ansible.</li>
+<li>Đề nghị đội hạ tầng giao VM cơ bản (OS, mạng, đăng ký, NTP) và cấp cho đội nền tảng quyền <b>SSH có sudo</b> trên mọi node. Nếu không được, đội hạ tầng chạy cùng playbook theo yêu cầu và phối hợp từng thay đổi.</li>
+<li><b>Rủi ro:</b> nếu công ty ép một baseline hardening cho mọi VM, node Kubernetes cần ngoại lệ cho các thiết lập ở trên. Nếu không baseline có thể bật lại firewalld hoặc swap và làm hỏng cluster.</li>
+</ul>
+
+<h2>Patch hệ điều hành</h2>
+<p>Patch OS nằm ngoài phạm vi cài đặt, nên thống nhất nguồn cập nhật và cửa sổ patch với đội hạ tầng trước khi lên production. Patch <b>từng node một</b>: di tản workload, patch, khởi động lại, trả node về phục vụ.</p>
+<pre><code>kubectl cordon NODE
+kubectl drain NODE --ignore-daemonsets --delete-emptydir-data
+# patch và reboot node
+kubectl uncordon NODE</code></pre>
+<p>Với node có Pod dùng PodDisruptionBudget hoặc Elasticsearch, kiểm tra cluster đã <i>green</i> lại trước khi sang node kế tiếp.</p>
+</article>
+
+<!-- ============ SETUP: RKE2 ============ -->
+<article class="page" data-id="setup-rke2" data-group="Setup K8s on-prem" data-title="Cài RKE2 HA" hidden>
+<h1>Cài RKE2: cluster HA với 3 control plane</h1>
+<p class="lead">RKE2 là distro Kubernetes của SUSE Rancher, tập trung vào bảo mật và mạng đóng. Control plane chạy dạng static pod, runtime là containerd, và có thể bật sẵn profile CIS.</p>
+
+<h2>Trình tự</h2>
+<ol>
+<li>Chuẩn bị node (trang trước) và load balancer cho cổng <b>6443</b> và <b>9345</b> trỏ vào 3 control plane.</li>
+<li>Cài và khởi động <b>server đầu tiên</b> (khởi tạo cluster và etcd).</li>
+<li>Cài và khởi động <b>hai server còn lại</b>, trỏ về VIP của load balancer (cổng 9345).</li>
+<li>Cài <b>agent</b> (worker) và join qua cùng VIP.</li>
+<li>Gắn label, taint cho node đặc biệt (ingress, sandbox).</li>
+</ol>
+
+<h2>Cấu hình server đầu tiên</h2>
+<p>File <code>/etc/rancher/rke2/config.yaml</code>:</p>
+<pre><code>token: CHANGE_ME_SHARED_SECRET
+tls-san:
+  - api.devstg.example.com        # tên DNS của VIP API
+  - 10.0.10.10                    # IP của VIP API
+cni: cilium
+profile: cis                      # bật hardening CIS (cần user etcd và sysctl ở trang trước)
+selinux: true
+cluster-cidr: 10.42.0.0/16        # mặc định, xác nhận không trùng mạng công ty
+service-cidr: 10.43.0.0/16        # mặc định, xác nhận không trùng mạng công ty
+disable:
+  - rke2-ingress-nginx            # dùng Traefik cài qua GitOps (tên chart có thể đổi theo phiên bản)
+etcd-snapshot-schedule-cron: "0 */6 * * *"
+etcd-snapshot-retention: 20</code></pre>
+<div class="callout warn"><b>Cẩn thận: dải IP nội bộ</b><p>Pod dùng <code>10.42.0.0/16</code> và Service dùng <code>10.43.0.0/16</code> theo mặc định. Dải này không route ra ngoài, nhưng một node hoặc Pod sẽ <b>không truy cập được</b> bất kỳ hệ thống nào của công ty có địa chỉ rơi vào dải đó, vì traffic bị giữ lại trong cluster. Xác nhận với đội mạng trước khi cài. Không thể đổi CIDR sau khi cluster đã chạy.</p></div>
+
+<h2>Cài đặt</h2>
+<pre><code># Online
+curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION=v1.36.0+rke2r1 sh -
+
+# Air-gap: tải sẵn tarball và gói image lên node, rồi cài từ file
+INSTALL_RKE2_ARTIFACT_PATH=/opt/rke2-artifacts sh install.sh
+
+systemctl enable --now rke2-server.service
+journalctl -u rke2-server -f</code></pre>
+<p>Đường dẫn công cụ sau khi cài: <code>kubectl</code> ở <code>/var/lib/rancher/rke2/bin/</code>, kubeconfig ở <code>/etc/rancher/rke2/rke2.yaml</code>.</p>
+<pre><code>export PATH=$PATH:/var/lib/rancher/rke2/bin
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+kubectl get nodes
+kubectl get pods -A</code></pre>
+
+<h2>Join thêm control plane</h2>
+<p>Trên server 2 và 3, trỏ về VIP (cổng 9345) và dùng cùng token:</p>
+<pre><code>server: https://api.devstg.example.com:9345
+token: CHANGE_ME_SHARED_SECRET
+tls-san:
+  - api.devstg.example.com
+  - 10.0.10.10
+cni: cilium
+profile: cis
+selinux: true
+disable:
+  - rke2-ingress-nginx</code></pre>
+<p>Khởi động lần lượt từng server, chờ node <code>Ready</code> rồi mới tới server kế tiếp để etcd join êm.</p>
+
+<h2>Join worker (agent)</h2>
+<pre><code>curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" sh -
+
+# /etc/rancher/rke2/config.yaml
+server: https://api.devstg.example.com:9345
+token: CHANGE_ME_SHARED_SECRET
+selinux: true
+node-label:
+  - "node-role.example.com/ingress=true"      # chỉ trên 2 ingress worker
+# node sandbox:
+# node-label: ["sandbox=true"]
+# node-taint: ["sandbox=true:NoSchedule"]
+
+systemctl enable --now rke2-agent.service</code></pre>
+
+<h2>Registry nội bộ (air-gap)</h2>
+<p>Node chỉ kéo image từ registry nội bộ. File <code>/etc/rancher/rke2/registries.yaml</code>:</p>
+<pre><code>mirrors:
+  docker.io:
+    endpoint: ["https://registry.example.com"]
+  registry.k8s.io:
+    endpoint: ["https://registry.example.com"]
+configs:
+  "registry.example.com":
+    auth:
+      username: svc-pull
+      password: CHANGE_ME
+    tls:
+      ca_file: /etc/pki/ca-trust/source/anchors/company-ca.crt</code></pre>
+<p>Thêm <code>system-default-registry: registry.example.com</code> vào <code>config.yaml</code> để image hệ thống của RKE2 cũng lấy từ registry nội bộ.</p>
+
+<h2>Cấu hình Cilium của RKE2</h2>
+<p>Cilium được RKE2 cài như một chart. Tùy chỉnh bằng <code>HelmChartConfig</code> đặt trong thư mục manifests của server, không sửa chart trực tiếp:</p>
+<pre><code># /var/lib/rancher/rke2/server/manifests/rke2-cilium-config.yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-cilium
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    hubble:
+      enabled: true
+      relay: {enabled: true}
+      ui: {enabled: true}
+    # Nếu chạy gVisor: thường cần socketLB.hostNamespaceOnly: true
+    # để Pod gVisor truy cập được Service trong cluster (kiểm tra theo phiên bản)</code></pre>
+
+<h2>Profile CIS</h2>
+<ul>
+<li><code>profile: cis</code> bật hardening theo CIS Benchmark: kiểm tra quyền file, bắt buộc user <code>etcd</code>, sysctl, Pod Security Admission mặc định ở mức <b>restricted</b> (có namespace ngoại lệ), và một số NetworkPolicy mặc định cho các namespace hệ thống.</li>
+<li>Mặc định <code>restricted</code> toàn cluster có thể làm hỏng workload chưa chỉnh <code>securityContext</code>. Namespace cần mức thấp hơn (ví dụ sandbox chạy root trong gVisor) đặt label PSA riêng, như đã nói ở trang PSA.</li>
+</ul>
+
+<h2>Snapshot etcd và khôi phục</h2>
+<pre><code># Lưu snapshot thủ công (trước khi nâng cấp)
+rke2 etcd-snapshot save --name pre-upgrade
+rke2 etcd-snapshot ls
+
+# Ghi snapshot thẳng lên S3 (trong config.yaml)
+etcd-s3: true
+etcd-s3-endpoint: s3.example.com
+etcd-s3-bucket: devstg-etcd
+etcd-s3-access-key: CHANGE_ME
+etcd-s3-secret-key: CHANGE_ME
+etcd-s3-folder: devstg
+
+# Khôi phục (trên một server, các server còn lại phải dừng)
+systemctl stop rke2-server
+rke2 server --cluster-reset --cluster-reset-restore-path=/var/lib/rancher/rke2/server/db/snapshots/SNAPSHOT_FILE
+# sau đó với các server khác: xoá thư mục /var/lib/rancher/rke2/server/db rồi khởi động lại để join lại</code></pre>
+
+<h2>Nâng cấp</h2>
+<ul>
+<li><b>Thủ công:</b> chạy lại installer với <code>INSTALL_RKE2_VERSION</code> mới, lần lượt từng control plane rồi từng worker, drain trước khi restart service.</li>
+<li><b>Tự động:</b> <code>system-upgrade-controller</code> với các object <code>Plan</code> (server trước, agent sau). Cluster do Rancher tạo thì nâng cấp ngay trong giao diện Rancher.</li>
+<li>Mỗi lần chỉ lên một minor, luôn thử trên dev/stg trước và <b>chụp snapshot etcd</b> trước khi bắt đầu.</li>
+</ul>
+</article>
+
+<!-- ============ SETUP: RANCHER ============ -->
+<article class="page" data-id="setup-rancher" data-group="Setup K8s on-prem" data-title="Cài Rancher và đăng ký cluster" hidden>
+<h1>Cài Rancher và đăng ký các cluster</h1>
+<p class="lead">Rancher là management plane: một ứng dụng chạy trên cluster riêng (management cluster) để quản lý các cluster workload. Nó không phải nơi chạy ứng dụng của bạn.</p>
+
+<h2>Vai trò và nguyên tắc</h2>
+<ul>
+<li>Management cluster gồm <b>3 node RKE2</b>, chỉ chạy Rancher và thành phần phụ trợ.</li>
+<li>Rancher cho một console cho mọi cluster: sức khỏe, workload, log, phân quyền, nâng cấp Kubernetes.</li>
+<li><b>Rancher ngừng thì ứng dụng vẫn chạy.</b> Cluster workload hoạt động độc lập, chỉ mất khả năng quản lý qua console cho đến khi Rancher trở lại.</li>
+<li>Cài Rancher trên một cluster RKE2 (hoặc k3s) bằng Helm. Rancher server cần HA, backup và nâng cấp đúng ma trận tương thích.</li>
+</ul>
+
+<h2>Cài trên management cluster</h2>
+<pre><code># 1. cert-manager (Rancher dùng để cấp chứng chỉ)
+helm repo add jetstack https://charts.jetstack.io
+helm install cert-manager jetstack/cert-manager \
+  --namespace cert-manager --create-namespace --set crds.enabled=true
+
+# 2. Rancher
+helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
+helm install rancher rancher-stable/rancher \
+  --namespace cattle-system --create-namespace \
+  --set hostname=rancher.example.com \
+  --set bootstrapPassword=CHANGE_ME \
+  --set replicas=3 \
+  --set ingress.tls.source=secret \
+  --set privateCA=true</code></pre>
+<div class="tw"><table>
+<tr><th>Tùy chọn</th><th>Ý nghĩa</th></tr>
+<tr><td><code>ingress.tls.source</code></td><td><code>rancher</code> (Rancher tự ký), <code>letsEncrypt</code> (cần internet), hoặc <code>secret</code> (dùng chứng chỉ của bạn, hợp mạng đóng và CA công ty).</td></tr>
+<tr><td><code>privateCA=true</code></td><td>Khi chứng chỉ do CA nội bộ cấp, cần tạo Secret <code>tls-ca</code> chứa CA.</td></tr>
+<tr><td>Registry nội bộ</td><td>Mirror image của Rancher và dùng <code>systemDefaultRegistry</code> để cài trong mạng đóng.</td></tr>
+</table></div>
+<ul>
+<li>Rancher được publish qua load balancer ở cổng 443 và 80, trỏ vào NodePort <b>30443</b> và <b>30080</b> của 3 node Rancher (xem trang hạ tầng).</li>
+<li>Đăng nhập lần đầu bằng <code>bootstrapPassword</code>, đổi ngay mật khẩu và dựng SSO.</li>
+</ul>
+
+<h2>Đăng ký cluster workload</h2>
+<div class="tw"><table>
+<tr><th>Cách</th><th>Mô tả</th><th>Khi nào dùng</th></tr>
+<tr><td><b>Import</b></td><td>Bạn tự cài RKE2 (như trang trước) rồi đăng ký vào Rancher bằng một lệnh <code>kubectl apply</code> do Rancher sinh ra. Rancher quản lý nhưng không sở hữu vòng đời.</td><td>Bạn muốn kiểm soát cài đặt bằng Ansible và GitOps.</td></tr>
+<tr><td><b>Custom cluster</b></td><td>Rancher tạo cluster RKE2 trên VM có sẵn: bạn chạy lệnh đăng ký (kèm role etcd/control plane/worker) trên từng node. Rancher lo nâng cấp, snapshot trong giao diện.</td><td>Muốn nâng cấp Kubernetes bằng một cú click từ console.</td></tr>
+</table></div>
+<p>Node của cluster workload cần tới được địa chỉ Rancher ở cổng 443 để đăng ký. Cluster workload nên đặt tên có quy ước (ví dụ <code>devstg</code>, <code>prod</code>).</p>
+
+<h2>SSO và phân quyền</h2>
+<ul>
+<li>Cấu hình <b>auth provider</b> (Keycloak qua OIDC hoặc SAML, ngoài ra có AD, LDAP) ở mục Users và Authentication.</li>
+<li>Phân quyền ba tầng: <b>Global roles</b> (toàn Rancher), <b>Cluster roles</b>, <b>Project roles</b> (project gom nhiều namespace).</li>
+<li>Map nhóm của SSO sang role để không quản lý user tay. Tài khoản <code>admin</code> cục bộ chỉ dùng dự phòng.</li>
+</ul>
+
+<h2>Tính năng đi kèm đáng dùng</h2>
+<ul>
+<li><b>Monitoring</b> (chart dựa trên Prometheus Operator): xem số liệu trong console, xem trang công cụ giám sát.</li>
+<li><b>Fleet:</b> GitOps cho nhiều cluster (bạn có thể dùng Flux thay thế, nhưng đừng chạy cả hai quản lý cùng một resource).</li>
+<li><b>rancher-backup:</b> operator sao lưu và khôi phục dữ liệu của chính Rancher (CRD <code>Backup</code>, <code>Restore</code>), có thể ghi lên S3.</li>
+<li>Longhorn (storage), NeuVector (bảo mật runtime) nếu cần, nhưng không bắt buộc.</li>
+</ul>
+
+<h2>Nâng cấp và hỗ trợ</h2>
+<ul>
+<li>Nâng cấp <b>Rancher trước</b>, sau đó mới nâng Kubernetes của cluster workload, và kiểm tra bảng tương thích giữa Rancher và phiên bản RKE2.</li>
+<li>Khi cần hỗ trợ 24x7, chuyển sang <b>Rancher Prime</b> bằng cách đổi nguồn chart (cùng mã nguồn), không phải dựng lại cluster.</li>
+</ul>
+</article>
+
+<!-- ============ SETUP: GITOPS ============ -->
+<article class="page" data-id="setup-gitops" data-group="Setup K8s on-prem" data-title="GitOps bootstrap với Flux" hidden>
+<h1>Bootstrap GitOps bằng Flux sau khi có cluster</h1>
+<p class="lead">Sau khi cài cluster, mọi thứ còn lại (add-on nền tảng và ứng dụng) được khai báo trong Git và Flux áp dụng. Không có gì được áp tay bằng kubectl.</p>
+
+<h2>Bootstrap trong mạng đóng</h2>
+<p>Cluster không ra internet, nên image của Flux, chart và Git đều lấy từ hệ thống nội bộ:</p>
+<pre><code>flux check --pre
+flux bootstrap git \
+  --url=ssh://git@git.example.com/platform/gitops.git \
+  --branch=main \
+  --path=clusters/devstg \
+  --private-key-file=./flux-deploy-key \
+  --registry=registry.example.com/fluxcd \
+  --components-extra=image-reflector-controller,image-automation-controller</code></pre>
+<ul>
+<li>Mirror image của Flux vào registry nội bộ và dùng <code>--registry</code>.</li>
+<li>Charts đến từ <code>HelmRepository</code> trỏ vào repo Helm nội bộ (proxy/hosted trên artifact repo) hoặc OCI registry. Image trong chart cũng phải được mirror và nên <b>ghim theo digest</b>.</li>
+<li>Phiên bản Flux phải hỗ trợ phiên bản Kubernetes của cluster.</li>
+</ul>
+
+<h2>Cấu trúc repo gợi ý</h2>
+<pre><code>gitops/
+  clusters/
+    devstg/
+      flux-system/            # do bootstrap sinh ra
+      infrastructure.yaml     # Kustomization: controllers rồi configs
+      apps.yaml               # Kustomization cho ứng dụng
+    prod/
+      ...
+  infrastructure/
+    controllers/              # HelmRelease: cert-manager, traefik, vso, eck, otel-operator...
+    configs/                  # ClusterIssuer, IngressClass, VaultAuth, NetworkPolicy chung...
+  apps/
+    base/                     # manifest dùng chung
+    overlays/
+      devstg/
+      prod/</code></pre>
+
+<h2>Thứ tự áp dụng</h2>
+<p>Operator phải chạy xong rồi custom resource của nó mới áp dụng được. Dùng <code>dependsOn</code> và <code>wait</code>:</p>
+<pre><code>apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: infra-controllers, namespace: flux-system}
+spec:
+  interval: 10m
+  path: ./infrastructure/controllers
+  prune: true
+  wait: true                  # đợi các HelmRelease sẵn sàng
+  sourceRef: {kind: GitRepository, name: flux-system}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: infra-configs, namespace: flux-system}
+spec:
+  interval: 10m
+  dependsOn: [{name: infra-controllers}]
+  path: ./infrastructure/configs
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: apps, namespace: flux-system}
+spec:
+  interval: 10m
+  dependsOn: [{name: infra-configs}]
+  path: ./apps/overlays/devstg
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}</code></pre>
+<div class="callout"><b>Dễ nhầm</b><p>Hai thứ cùng tên “Kustomization”: object <code>Kustomization</code> của Flux (<code>kustomize.toolkit.fluxcd.io</code>, nói với Flux áp dụng cái gì, ở đâu) và file <code>kustomization.yaml</code> của kustomize (liệt kê resource để build). Flux Kustomization thường trỏ vào một thư mục có <code>kustomization.yaml</code>.</p></div>
+
+<h2>Ví dụ HelmRelease cho một add-on</h2>
+<pre><code>apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata: {name: traefik, namespace: flux-system}
+spec:
+  interval: 1h
+  url: https://repo.example.com/repository/helm-traefik/   # mirror nội bộ
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata: {name: traefik, namespace: traefik}
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: traefik
+      version: "41.x"
+      sourceRef: {kind: HelmRepository, name: traefik, namespace: flux-system}
+  values:
+    service: {type: NodePort}</code></pre>
+
+<h2>Nguyên tắc vận hành</h2>
+<ul>
+<li>Mọi thay đổi là một commit đã review. Sửa tay trên cluster sẽ bị Flux đưa về trạng thái trong Git (drift detection).</li>
+<li>Thay đổi đi qua dev/stg trước rồi mới promote sang production (overlay hoặc nhánh riêng).</li>
+<li>Secret không nằm trong Git: dùng Vault Secrets Operator hoặc SOPS (xem trang secret).</li>
+<li>Công cụ thông báo: bật <code>notification-controller</code> để gửi cảnh báo khi reconcile thất bại.</li>
+<li>Phục hồi thảm họa: cả cluster dựng lại được từ Git và backup, đây là một lợi ích chính của GitOps.</li>
+</ul>
+</article>
+
+<!-- ============ SETUP: OPS ============ -->
+<article class="page" data-id="setup-ops" data-group="Setup K8s on-prem" data-title="Vận hành, rủi ro và quyết định mở" hidden>
+<h1>Mô hình vận hành, rủi ro và các quyết định mở</h1>
+<p class="lead">Dựng xong cluster mới là bước đầu. Phần này nói ai làm gì, việc định kỳ, và những quyết định cần chốt trước khi cài.</p>
+
+<h2>Mô hình vận hành</h2>
+<div class="tw"><table>
+<tr><th>Lĩnh vực</th><th>Đội nền tảng K8s</th><th>Đội hạ tầng</th></tr>
+<tr><td>VM, mạng, load balancer, firewall, DNS</td><td>Yêu cầu</td><td>Cung cấp và vận hành</td></tr>
+<tr><td>OS của node</td><td>Áp các thiết lập node bằng Ansible, hoặc nhờ đội hạ tầng áp</td><td>OS nền và đăng ký; cách patch cần thống nhất</td></tr>
+<tr><td>Kubernetes: cài, nâng cấp, backup và restore etcd</td><td>Vận hành</td><td></td></tr>
+<tr><td>Add-on nền tảng và ứng dụng (GitOps)</td><td>Vận hành</td><td></td></tr>
+<tr><td>Backup storage</td><td>Sử dụng</td><td>Cung cấp (khi dùng object storage doanh nghiệp)</td></tr>
+<tr><td>Giám sát và cảnh báo</td><td>Vận hành trong từng cluster</td><td>Được thông báo các cảnh báo liên quan hạ tầng</td></tr>
+</table></div>
+
+<h2>Công việc định kỳ</h2>
+<ul>
+<li><b>Snapshot etcd mỗi 6 giờ</b>, sao chép sang backup storage. <b>Diễn tập khôi phục mỗi quý</b> trên dev/stg: backup chưa từng restore thì chưa phải là backup.</li>
+<li><b>Patch Kubernetes</b> mỗi 1 đến 2 tháng. <b>Nâng minor</b> khoảng hai lần mỗi năm, luôn dev/stg trước.</li>
+<li><b>Patch OS</b> hàng tháng, từng node một, sau khi thống nhất nguồn cập nhật và cửa sổ patch (đề xuất, ngoài phạm vi dựng cluster).</li>
+<li>Theo dõi hạn chứng chỉ (kể cả của chính cluster và Rancher), dung lượng volume, và cảnh báo Alertmanager.</li>
+</ul>
+
+<h2>Quyết định mở cần chốt trước khi cài</h2>
+<ul>
+<li><b>Quyền truy cập node:</b> SSH sudo cho đội nền tảng, hay đội hạ tầng áp thay đổi.</li>
+<li><b>Baseline hardening của công ty:</b> nếu có, cần ngoại lệ cho các thiết lập node (firewalld, swap).</li>
+<li><b>Chứng chỉ:</b> CA công ty hỗ trợ phương thức cấp tự động nào (CA trung gian, Vault PKI, ACME).</li>
+<li><b>Backup storage:</b> object storage doanh nghiệp hay một VM riêng chạy S3 tự host.</li>
+<li><b>Shared storage:</b> có storage class RWX hay không.</li>
+<li><b>Host vật lý:</b> tối thiểu ba, với anti-affinity cho các vai trò đã nêu.</li>
+<li><b>Dải IP nội bộ cluster:</b> xác nhận <code>10.42.0.0/16</code> và <code>10.43.0.0/16</code> không trùng hệ thống nào node cần truy cập, hoặc chọn dải khác. <b>Phải chốt trước khi cài</b>.</li>
+<li><b>Block storage:</b> hệ thống storage và driver CSI do khách hàng chọn, cần storage class RWO có mở rộng volume và tương thích với phiên bản Kubernetes đã chọn.</li>
+<li><b>Hệ điều hành:</b> RHEL 9 (có hỗ trợ và cập nhật qua kênh Red Hat) hay Rocky Linux 9 (cùng mã nguồn, miễn phí, nhưng hỗ trợ cộng đồng và cần nguồn cập nhật riêng). RKE2 hỗ trợ cả hai và cách cài giống nhau.</li>
+<li><b>Hỗ trợ vendor:</b> khi nào chuyển sang Rancher Prime.</li>
+</ul>
+
+<h2>Checklist trước go-live</h2>
+<ol>
+<li>Cả ba control plane, worker và sandbox nằm trên host vật lý khác nhau như thiết kế.</li>
+<li>Load balancer health check đúng, kể cả khi tắt thử một control plane.</li>
+<li>Snapshot etcd chạy tự động và đã khôi phục thành công trên dev/stg.</li>
+<li>Giám sát và cảnh báo hoạt động, có người nhận cảnh báo.</li>
+<li>Network policy mặc định chặn đã bật cho namespace ứng dụng.</li>
+<li>Credential khởi tạo (token RKE2, mật khẩu Rancher, key của dịch vụ) đã đổi và cất trong Vault.</li>
+<li>Quy trình nâng cấp đã chạy thử một vòng trên dev/stg.</li>
+</ol>
+</article>
+
+<!-- ============ TOOL: TRAEFIK ============ -->
+<article class="page" data-id="tool-traefik" data-group="Open-source tools" data-title="Traefik ingress" hidden>
+<h1>Traefik: ingress cho cluster on-prem</h1>
+<p class="lead">Traefik là ingress controller và reverse proxy. Trong thiết kế này nó nhận traffic TCP từ load balancer layer-4, kết thúc TLS và định tuyến tới Service.</p>
+
+<h2>Vì sao tự cài qua GitOps</h2>
+<ul>
+<li>RKE2 có sẵn một ingress controller đi kèm, nhưng bản đó gắn với phiên bản RKE2. Cài Traefik bằng <b>HelmRelease</b> giúp bạn kiểm soát phiên bản và cấu hình trong Git, không bị đổi theo mỗi lần nâng cấp RKE2.</li>
+<li>Vì vậy tắt ingress mặc định trong RKE2 (<code>disable: rke2-ingress-nginx</code>) và cài Traefik riêng.</li>
+</ul>
+
+<h2>Mô hình triển khai</h2>
+<ul>
+<li>Traefik chạy trên <b>2 ingress worker cố định</b> (nodeSelector hoặc affinity theo label), mỗi node một Pod (DaemonSet hoặc Deployment với anti-affinity).</li>
+<li>Service kiểu <b>NodePort</b>: <code>30080</code> (HTTP) và <code>30443</code> (HTTPS). Load balancer ngoài chuyển 80/443 tới các cổng này.</li>
+<li>TLS kết thúc tại Traefik, chứng chỉ do cert-manager cấp.</li>
+<li>Dùng <b>PROXY protocol</b> giữa load balancer và Traefik để thấy IP thật của client, và chỉ tin header PROXY từ địa chỉ load balancer.</li>
+</ul>
+<pre><code>apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata: {name: traefik, namespace: traefik}
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: traefik
+      version: "41.x"
+      sourceRef: {kind: HelmRepository, name: traefik, namespace: flux-system}
+  values:
+    deployment:
+      kind: DaemonSet
+    nodeSelector:
+      node-role.example.com/ingress: "true"
+    service:
+      type: NodePort
+    ports:
+      web:
+        nodePort: 30080
+        proxyProtocol:
+          trustedIPs: ["10.0.10.0/28"]        # địa chỉ của load balancer
+      websecure:
+        nodePort: 30443
+        proxyProtocol:
+          trustedIPs: ["10.0.10.0/28"]
+    providers:
+      kubernetesCRD:
+        enabled: true
+      kubernetesIngress:
+        enabled: true</code></pre>
+
+<h2>IngressRoute và Middleware</h2>
+<p>Ngoài <code>Ingress</code> chuẩn, Traefik có CRD riêng mạnh hơn: <code>IngressRoute</code> và <code>Middleware</code>. Ví dụ đường nhận log có kiểm tra khóa nguồn, xóa header nhạy cảm và giới hạn tốc độ:</p>
+<pre><code>apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: {name: auth-check, namespace: logging}
+spec:
+  forwardAuth:
+    address: http://auth-service.logging.svc:8080/verify
+    authRequestHeaders: ["Authorization", "X-Source-Key"]
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: {name: strip-auth, namespace: logging}
+spec:
+  headers:
+    customRequestHeaders:
+      Authorization: ""            # đặt rỗng để xoá header trước khi tới backend
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: {name: rate-limit, namespace: logging}
+spec:
+  rateLimit:
+    average: 100
+    burst: 200
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata: {name: collector, namespace: logging}
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`logs.example.com`) &amp;&amp; PathPrefix(`/v1/logs`)
+      kind: Rule
+      middlewares:
+        - name: auth-check
+        - name: strip-auth
+        - name: rate-limit
+      services:
+        - name: collector
+          port: 4318
+  tls:
+    secretName: logs-example-com-tls</code></pre>
+<ul>
+<li>Middleware chạy <b>theo thứ tự</b> khai báo. Ở ví dụ: kiểm tra khóa, rồi xóa header <code>Authorization</code>, rồi giới hạn tốc độ.</li>
+<li><code>forwardAuth</code> gọi một dịch vụ xác thực với header của request và cho qua nếu trả 2xx. Dịch vụ này thường tra Redis rồi tới database khi cache miss.</li>
+<li>Các middleware hay dùng khác: <code>ipAllowList</code> (giới hạn IP, ví dụ cho cổng truy cập tạm của developer), <code>redirectScheme</code>, <code>stripPrefix</code>, <code>compress</code>, <code>retry</code>.</li>
+<li>Traefik giữ kết nối TLS ngoài, còn Traefik tới Pod trong cluster là HTTP thường (hoặc HTTPS nếu cần mTLS nội bộ).</li>
+</ul>
+
+<h2>Lưu ý vận hành</h2>
+<ul>
+<li>Bật access log và metric Prometheus của Traefik, theo dõi tỷ lệ 4xx/5xx.</li>
+<li>Trỏ DNS wildcard (ví dụ <code>*.dev.example.com</code>) về VIP ứng dụng để không phải đổi DNS mỗi khi thêm host.</li>
+<li>Nếu mạng không cho phép PROXY protocol trên load balancer, dùng <code>X-Forwarded-For</code> và cấu hình <code>forwardedHeaders.trustedIPs</code> thay thế, nhưng chỉ tin header từ load balancer.</li>
+<li>Tách địa chỉ Rancher và địa chỉ ứng dụng: Rancher có VIP riêng, không đi chung Traefik của cluster workload.</li>
+</ul>
+</article>
+
+<!-- ============ TOOL: SECRETS ============ -->
+<article class="page" data-id="tool-secrets" data-group="Open-source tools" data-title="cert-manager, Vault Secrets Operator, Reloader" hidden>
+<h1>cert-manager, Vault Secrets Operator và Reloader</h1>
+<p class="lead">Ba công cụ giải quyết vòng đời của chứng chỉ và secret: cấp và gia hạn chứng chỉ tự động, đưa secret từ Vault vào cluster, và restart Pod khi chúng thay đổi.</p>
+
+<h2>cert-manager</h2>
+<p>Controller tự cấp và gia hạn chứng chỉ X.509 dưới dạng Secret. Hai khái niệm chính:</p>
+<ul>
+<li><b>Issuer / ClusterIssuer:</b> nguồn cấp chứng chỉ (CA nội bộ, Vault PKI, ACME, self-signed).</li>
+<li><b>Certificate:</b> khai báo chứng chỉ cần có (tên miền, thời hạn, Secret đích). cert-manager tạo và gia hạn trước khi hết hạn.</li>
+</ul>
+<div class="tw"><table>
+<tr><th>Nguồn cấp</th><th>Dùng khi</th></tr>
+<tr><td><code>ca</code></td><td>Có sẵn một CA trung gian (cặp key và chứng chỉ trong Secret).</td></tr>
+<tr><td><code>vault</code> (PKI)</td><td>Dùng Vault PKI engine làm CA công ty.</td></tr>
+<tr><td><code>acme</code></td><td>CA nội bộ hoặc công cộng nói ACME (trong mạng đóng cần ACME server nội bộ).</td></tr>
+<tr><td>Thủ công</td><td>CA không tự động hóa được: cấp chứng chỉ wildcard bằng tay, gia hạn mỗi năm và giám sát hạn.</td></tr>
+</table></div>
+<pre><code>apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata: {name: company-ca}
+spec:
+  ca:
+    secretName: company-intermediate-ca     # key và chứng chỉ của CA trung gian
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: {name: apps-wildcard, namespace: traefik}
+spec:
+  secretName: apps-wildcard-tls
+  duration: 2160h          # 90 ngày
+  renewBefore: 360h        # gia hạn trước 15 ngày
+  dnsNames:
+    - "*.dev.example.com"
+  issuerRef: {name: company-ca, kind: ClusterIssuer}</code></pre>
+<ul>
+<li>cert-manager cũng cấp chứng chỉ cho <b>admission webhook</b> của các operator (OpenTelemetry Operator, Kyverno…).</li>
+<li>Thêm CA công ty vào trust của node và Pod (qua <code>trust-manager</code> hoặc volume) để chúng tin các dịch vụ nội bộ.</li>
+<li>Theo dõi metric hạn chứng chỉ của cert-manager trong Prometheus và đặt cảnh báo.</li>
+</ul>
+
+<h2>Vault Secrets Operator (VSO)</h2>
+<p>Operator của HashiCorp đồng bộ secret từ Vault thành Secret Kubernetes, không cần sidecar hay sửa ứng dụng. Secret được giữ trong Vault, đưa vào cluster lúc chạy, không nằm trong Git hay image.</p>
+<pre><code>apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata: {name: vault, namespace: opensandbox}
+spec:
+  address: https://vault.example.com:8200
+  caCertSecretRef: company-ca
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata: {name: k8s-auth, namespace: opensandbox}
+spec:
+  vaultConnectionRef: vault
+  method: kubernetes
+  mount: kubernetes-devstg            # auth method của Vault, mỗi cluster một mount
+  kubernetes:
+    role: opensandbox
+    serviceAccount: default
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata: {name: server-api-key, namespace: opensandbox}
+spec:
+  vaultAuthRef: k8s-auth
+  mount: secret
+  type: kv-v2
+  path: platform/opensandbox/api-key
+  refreshAfter: 60s
+  destination:
+    name: server-api-key              # Secret Kubernetes được tạo ra
+    create: true
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: opensandbox-server        # restart khi giá trị đổi</code></pre>
+<ul>
+<li><b>VaultStaticSecret:</b> secret tĩnh (KV). <b>VaultDynamicSecret:</b> secret ngắn hạn do Vault sinh (database credentials). <b>VaultPKISecret:</b> chứng chỉ từ Vault PKI.</li>
+<li>Cách xác thực: Vault <b>Kubernetes auth</b> (bằng ServiceAccount). Mỗi cluster nên có mount auth riêng để cluster dev không đọc được secret của production.</li>
+<li><code>rolloutRestartTargets</code> cho phép VSO tự khởi động lại workload khi secret đổi.</li>
+<li>Thay thế: External Secrets Operator (nhiều backend), Secrets Store CSI Driver (mount thẳng vào Pod).</li>
+</ul>
+
+<h2>Reloader</h2>
+<p>Theo dõi ConfigMap và Secret, tự <b>rolling restart</b> workload dùng chúng khi nội dung thay đổi. Hữu ích sau khi chứng chỉ được gia hạn hoặc giá trị Vault đổi, vì biến môi trường và file đã mount trong container không tự cập nhật.</p>
+<pre><code>apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  annotations:
+    reloader.stakater.com/auto: "true"       # theo dõi mọi ConfigMap/Secret mà Deployment này dùng
+    # hoặc chỉ định cụ thể:
+    # secret.reloader.stakater.com/reload: "server-api-key"</code></pre>
+<div class="callout tip"><b>Mẹo</b><p>VSO có <code>rolloutRestartTargets</code> cho secret của nó, còn Reloader bao quát cả ConfigMap và Secret do công cụ khác tạo (ví dụ chứng chỉ của cert-manager). Chọn một cách thống nhất cho từng loại để tránh restart hai lần.</p></div>
+</article>
+
+<!-- ============ TOOL: OBSERVE ============ -->
+<article class="page" data-id="tool-observe" data-group="Open-source tools" data-title="Giám sát và add-on tùy chọn" hidden>
+<h1>Giám sát (Prometheus, Grafana, Alertmanager) và các add-on tùy chọn</h1>
+<p class="lead">Mỗi cluster có bộ giám sát riêng. Các add-on như Kyverno, VPA/Goldilocks, OpenCost thêm sau qua GitOps khi nhu cầu xuất hiện.</p>
+
+<h2>Prometheus, Grafana, Alertmanager</h2>
+<ul>
+<li><b>Prometheus</b> thu thập metric (kéo theo chu kỳ) và lưu dạng time series. <b>Grafana</b> vẽ dashboard. <b>Alertmanager</b> nhận cảnh báo từ Prometheus, nhóm, khử trùng lặp và gửi đi (email, chat, webhook).</li>
+<li>Cài bằng chart <b>kube-prometheus-stack</b> (dựa trên Prometheus Operator) hoặc chart Monitoring của Rancher, có sẵn dashboard và rule cho Kubernetes.</li>
+<li>Giám sát <b>trong từng cluster</b> và xem được ngay trong console Rancher.</li>
+</ul>
+<pre><code># Theo dõi một ứng dụng: ServiceMonitor
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata: {name: web, namespace: demo}
+spec:
+  selector:
+    matchLabels: {app: web}
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+# Cảnh báo: PrometheusRule
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata: {name: web-alerts, namespace: demo}
+spec:
+  groups:
+    - name: web
+      rules:
+        - alert: HighErrorRate
+          expr: sum(rate(http_requests_total{app="web",code=~"5.."}[5m])) / sum(rate(http_requests_total{app="web"}[5m])) &gt; 0.05
+          for: 10m
+          labels: {severity: page}
+          annotations: {summary: "Tỷ lệ lỗi 5xx trên 5% trong 10 phút"}</code></pre>
+<h3>Những gì nên giám sát từ đầu</h3>
+<ul>
+<li>Sức khỏe control plane: độ trễ API server, <b>etcd</b> (fsync, leader, dung lượng DB).</li>
+<li>Node: CPU, RAM, đĩa, trạng thái <code>NotReady</code>.</li>
+<li>Pod: restart liên tục, <code>Pending</code>, <code>OOMKilled</code>.</li>
+<li>Volume: dung lượng PVC còn lại. Chứng chỉ: số ngày còn lại (cert-manager).</li>
+<li>Ingress: tỷ lệ lỗi và độ trễ ở Traefik. Backup: lần chạy gần nhất thành công của etcd snapshot, Velero.</li>
+</ul>
+<ul>
+<li>Cấu hình lưu trữ metric: retention theo dung lượng volume, dùng storage class RWO. Cân nhắc remote write nếu cần lưu lâu.</li>
+<li>Alertmanager route theo <code>severity</code> và <code>team</code>. Cảnh báo hạ tầng được chuyển cho đội hạ tầng.</li>
+</ul>
+
+<h2>Kyverno: policy engine</h2>
+<p>Viết luật cluster bằng YAML (validate, mutate, generate, verify image). Ví dụ các luật gợi ý cho nền tảng:</p>
+<pre><code># Chỉ cho phép image từ registry nội bộ
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata: {name: allowed-registries}
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: only-internal-registry
+      match:
+        any:
+          - resources: {kinds: [Pod]}
+      validate:
+        message: "Image phải đến từ registry.example.com"
+        pattern:
+          spec:
+            containers:
+              - image: "registry.example.com/*"
+---
+# Tự tạo NetworkPolicy default-deny cho namespace mới
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata: {name: default-deny}
+spec:
+  rules:
+    - name: generate-default-deny
+      match:
+        any:
+          - resources: {kinds: [Namespace]}
+      generate:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        name: default-deny
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            podSelector: {}
+            policyTypes: [Ingress, Egress]</code></pre>
+<p>Luật khác thường gặp: bắt buộc <code>runtimeClassName: gvisor</code> cho Pod ở namespace sandbox, bắt buộc label, cấm tag <code>latest</code>. Chi tiết về policy engine có ở trang PSA và policy.</p>
+
+<h2>Hubble</h2>
+<p>Lớp quan sát luồng mạng của Cilium. Bật trong cấu hình Cilium của RKE2 (xem trang cài RKE2), không phải cài riêng. Rất hữu ích khi network policy trở nên chặt: <code>hubble observe --verdict DROPPED</code> cho thấy kết nối nào bị chặn và vì sao. Xem trang CNI để biết lệnh.</p>
+
+<h2>VPA ở chế độ khuyến nghị và Goldilocks</h2>
+<p>Đo CPU, RAM thực tế của từng ứng dụng và gợi ý <code>requests/limits</code>, <b>không</b> tự sửa Pod đang chạy.</p>
+<pre><code>apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata: {name: web, namespace: demo}
+spec:
+  targetRef: {apiVersion: apps/v1, kind: Deployment, name: web}
+  updatePolicy:
+    updateMode: "Off"            # chỉ khuyến nghị</code></pre>
+<p>Goldilocks dựng VPA cho cả namespace và có giao diện dashboard:</p>
+<pre><code>kubectl label ns demo goldilocks.fairwinds.com/enabled=true</code></pre>
+<p>Dùng kết quả để đặt lại requests cho đúng, tránh đặt quá lớn gây lãng phí hoặc quá nhỏ gây OOM.</p>
+
+<h2>OpenCost</h2>
+<p>Báo cáo chi phí theo namespace, workload, label. Với on-prem, giá không có sẵn nên phải <b>nhập tay</b> giá CPU, RAM, lưu trữ. Chỉ đáng triển khai nếu có chargeback hoặc showback cho các đội.</p>
+<div class="callout"><b>Ghi chú</b><p>Các add-on này nằm ở giai đoạn sau: không cần hạ tầng bổ sung, chỉ cần thêm HelmRelease vào repo GitOps khi cần.</p></div>
+</article>
+
+<!-- ============ TOOL: BACKUP ============ -->
+<article class="page" data-id="tool-backup" data-group="Open-source tools" data-title="Backup: etcd, Velero, S3" hidden>
+<h1>Backup và khôi phục: etcd, Velero và lưu trữ S3</h1>
+<p class="lead">Ba lớp backup khác nhau cho ba loại dữ liệu, tất cả ghi ra object storage S3 nằm ngoài cluster.</p>
+
+<h2>Bản đồ backup</h2>
+<div class="tw"><table>
+<tr><th>Dữ liệu</th><th>Công cụ</th><th>Ghi chú</th></tr>
+<tr><td>Trạng thái cluster (etcd)</td><td>Snapshot etcd của RKE2</td><td>Mỗi 6 giờ ra S3, diễn tập khôi phục mỗi quý.</td></tr>
+<tr><td>Dữ liệu Elasticsearch</td><td>Snapshot (SLM) vào S3</td><td>Tăng dần, không cần plugin từ Elasticsearch 8 trở lên.</td></tr>
+<tr><td>Volume ứng dụng (PVC) và manifest</td><td>Velero</td><td>Chỉ hỗ trợ object storage làm đích.</td></tr>
+<tr><td>Manifest, cấu hình</td><td>Git (GitOps)</td><td>Không cần backup riêng ngoài Git.</td></tr>
+<tr><td>Rancher</td><td>rancher-backup</td><td>Backup dữ liệu của chính Rancher.</td></tr>
+</table></div>
+<ul>
+<li>Dữ liệu tạm không cần backup: hàng đợi tạm của collector, stream sự kiện trong Redis, hay sandbox ngắn hạn. Mất chúng chỉ mất dữ liệu đang xử lý.</li>
+<li>Database dùng backup của chính database đó.</li>
+</ul>
+
+<h2>S3 làm nơi lưu backup</h2>
+<ul>
+<li><b>Ưu tiên:</b> object storage doanh nghiệp sẵn có, do đội hạ tầng vận hành.</li>
+<li><b>Thay thế:</b> VM riêng chạy S3 tự host như <b>Garage</b> (S3-compatible, nhẹ), đặt <b>tách khỏi toolchain node</b> để một sự cố không xóa cả cấu hình lẫn bản backup.</li>
+<li>Mỗi cluster và mục đích một bucket với credential riêng, cluster dev/stg không có quyền ghi vào bucket production.</li>
+<li>Production nên có bản sao thứ hai ở địa điểm khác.</li>
+</ul>
+<pre><code># Garage: các bước tối thiểu để có bucket và key
+garage layout assign -z dc1 -c 500G NODE_ID
+garage layout apply --version 1
+garage bucket create devstg-etcd
+garage key create devstg-etcd-key
+garage bucket allow --read --write devstg-etcd --key devstg-etcd-key</code></pre>
+
+<h2>Velero</h2>
+<p>Backup và khôi phục tài nguyên Kubernetes cùng dữ liệu volume. Hai cách sao lưu volume:</p>
+<ul>
+<li><b>CSI snapshot:</b> dùng VolumeSnapshot của driver CSI (nhanh, cần driver hỗ trợ).</li>
+<li><b>File-system backup (node-agent, dùng Kopia):</b> sao chép file trong volume, dùng được với mọi loại volume nhưng chậm hơn và Pod đang ghi thì cần cẩn thận.</li>
+</ul>
+<pre><code>velero install \
+  --provider aws \
+  --plugins velero/velero-plugin-for-aws:v1.11.0 \
+  --bucket devstg-velero \
+  --secret-file ./velero-credentials \
+  --backup-location-config region=us-east-1,s3ForcePathStyle=true,s3Url=https://s3.example.com \
+  --use-node-agent
+
+# Lịch backup hàng ngày, giữ 30 ngày
+velero schedule create daily-apps \
+  --schedule="0 2 * * *" \
+  --include-namespaces app-studio \
+  --default-volumes-to-fs-backup \
+  --ttl 720h
+
+velero backup get
+velero restore create --from-backup daily-apps-20261030020000</code></pre>
+<p>Số phiên bản plugin ở trên chỉ là ví dụ, chọn bản tương thích với phiên bản Velero bạn cài.</p>
+<ul>
+<li>Khôi phục sang namespace khác bằng <code>--namespace-mappings</code>, hữu ích để thử restore mà không đè dữ liệu thật.</li>
+<li>Backup của volume dùng chung (ví dụ file build của ứng dụng) là <b>nguồn sự thật duy nhất</b> nên cần lịch backup riêng.</li>
+</ul>
+
+<h2>Nguyên tắc</h2>
+<div class="callout warn"><b>Cẩn thận</b><p>Backup chưa từng khôi phục thử thì chưa đáng tin. Đặt lịch diễn tập định kỳ (etcd mỗi quý, dữ liệu ứng dụng khi thay đổi lớn), ghi thời gian khôi phục thực tế (RTO) và lượng dữ liệu có thể mất (RPO) để so với yêu cầu.</p></div>
+</article>
+
+<!-- ============ TOOL: ECK ============ -->
+<article class="page" data-id="tool-eck" data-group="Open-source tools" data-title="Elasticsearch với ECK" hidden>
+<h1>Elasticsearch trên Kubernetes với ECK</h1>
+<p class="lead">ECK (Elastic Cloud on Kubernetes) là operator do Elastic phát hành để chạy Elasticsearch, Kibana và các thành phần Elastic khác. Ví dụ ở đây là một nền tảng log đa tenant, mỗi workspace có data stream, thời gian lưu và khóa truy cập riêng.</p>
+
+<h2>Từ Docker Compose lên Kubernetes</h2>
+<div class="tw"><table>
+<tr><th>Khía cạnh</th><th>Hiện tại (một container)</th><th>Hệ quả</th></tr>
+<tr><td>Topology</td><td>Một node Elasticsearch</td><td>Không dự phòng, host là điểm lỗi duy nhất.</td></tr>
+<tr><td>Dữ liệu</td><td>Docker volume cục bộ</td><td>Dữ liệu gắn với một máy.</td></tr>
+<tr><td>Backup</td><td>Docker volume cục bộ trên cùng host</td><td>Backup nằm cùng chỗ với dữ liệu nó bảo vệ.</td></tr>
+<tr><td>Cấu hình</td><td>Script bootstrap chạy từ CI</td><td>Trạng thái cluster không tái tạo được từ Git.</td></tr>
+<tr><td>Mở rộng</td><td>Thủ công</td><td>Thêm dung lượng phải dựng lại host.</td></tr>
+</table></div>
+
+<h2>Vì sao dùng ECK</h2>
+<ul>
+<li>Operator tự lo những phần dễ sai: cấp và gia hạn chứng chỉ TLS, <b>nâng cấp phiên bản từng node</b> không mất dữ liệu, drain node trước khi tắt, giữ đúng thành viên cluster khi Pod đến và đi.</li>
+<li>Đây là cách duy nhất Elastic hỗ trợ: Helm chart của Elastic đã được archive từ 5/2023.</li>
+<li>Tính năng cần dùng nằm trong license <b>Basic</b> (miễn phí). Basic không có hỗ trợ vendor và các tính năng doanh nghiệp như searchable snapshots, autoscaling. Thiết kế không phụ thuộc vào chúng.</li>
+<li>Tự viết và duy trì cấu hình riêng thì phải làm lại gia hạn chứng chỉ và nâng cấp an toàn, tốn công và có rủi ro mất dữ liệu.</li>
+</ul>
+
+<h2>Kích thước (ví dụ)</h2>
+<div class="tw"><table>
+<tr><th>Môi trường</th><th>Số node</th><th>Heap/node</th><th>RAM/node</th><th>Đĩa/node</th></tr>
+<tr><td>Development</td><td>3</td><td>1 GiB</td><td>2 GiB</td><td>50 GiB</td></tr>
+<tr><td>Staging</td><td>3</td><td>4 GiB</td><td>8 GiB</td><td>200 GiB</td></tr>
+<tr><td>Production</td><td>5</td><td>8 GiB</td><td>16 GiB</td><td>1 TiB</td></tr>
+</table></div>
+<ul>
+<li><b>Số node lẻ</b> để luôn có đa số khi bầu leader: 3 node chịu mất 1, 5 node chịu mất 2.</li>
+<li>RAM đặt <b>gấp đôi heap</b>, phần còn lại dành cho file cache mà Elasticsearch dựa vào để tìm kiếm nhanh.</li>
+<li>Mỗi node Elasticsearch đặt trên một worker khác nhau (anti-affinity). Cluster production 5 node cần 5 worker đủ RAM.</li>
+<li>Mỗi Pod có <b>volume riêng</b> (RWO) từ block storage, không dùng chung. Elasticsearch đã giữ bản sao shard trên node khác, storage dùng chung chỉ thêm chi phí và điểm lỗi chung.</li>
+<li>Cần đặt <code>vm.max_map_count=1048576</code> trên worker (trang chuẩn bị node).</li>
+</ul>
+
+<h2>Resource Elasticsearch</h2>
+<pre><code>apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata: {name: logs, namespace: elastic}
+spec:
+  version: 9.3.0
+  nodeSets:
+    - name: default
+      count: 3
+      config:
+        node.store.allow_mmap: true
+      podTemplate:
+        spec:
+          containers:
+            - name: elasticsearch
+              env:
+                - {name: ES_JAVA_OPTS, value: "-Xms4g -Xmx4g"}
+              resources:
+                requests: {cpu: "2", memory: 8Gi}
+                limits: {memory: 8Gi}
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      elasticsearch.k8s.elastic.co/cluster-name: logs
+      volumeClaimTemplates:
+        - metadata: {name: elasticsearch-data}
+          spec:
+            accessModes: [ReadWriteOnce]
+            storageClassName: block-rwo
+            resources: {requests: {storage: 200Gi}}</code></pre>
+<p>Operator sinh Service, Secret (mật khẩu user <code>elastic</code>, chứng chỉ) và StatefulSet. Mật khẩu: <code>kubectl get secret logs-es-elastic-user -o go-template='{{.data.elastic | base64decode}}'</code>. Mirror image của operator và Kibana vào registry nội bộ.</p>
+
+<h2>Vòng đời dữ liệu</h2>
+<p>Mỗi workspace ghi vào một <b>data stream</b>: một đích ghi có tên, phía sau là chuỗi index do Elasticsearch tự quản lý. Hai cơ chế phối hợp:</p>
+<ul>
+<li><b>Rollover:</b> đóng index hiện tại và mở index mới khi đạt giới hạn kích thước hoặc tuổi, giữ mỗi index ở cỡ dễ quản lý.</li>
+<li><b>Lifecycle policy (ILM):</b> xóa index khi quá thời gian lưu của workspace.</li>
+</ul>
+<pre><code>PUT _ilm/policy/logs-30d
+{
+  "policy": {
+    "phases": {
+      "hot": {"actions": {"rollover": {"max_primary_shard_size": "50gb", "max_age": "1d"}}},
+      "delete": {"min_age": "30d", "actions": {"delete": {}}}
+    }
+  }
+}</code></pre>
+<div class="callout warn"><b>Thời gian lưu đo từ rollover, không phải từ lúc tạo index</b><p>Bộ đếm xóa bắt đầu khi index rollover. Thời gian lưu thực tế bằng khoảng rollover cộng với thời gian lưu cấu hình. Nên nói rõ với khách hàng để cam kết “lưu 30 ngày” không bị hiểu thành con số chính xác tuyệt đối.</p></div>
+<ul>
+<li>Các mức lưu cho workspace: 7, 30, 60, 90, 180, 365 ngày (mặc định 30). Có thể cho workspace chọn thời gian tùy chỉnh.</li>
+<li>Policy chuẩn nằm trong Git và được áp bằng một Job do GitOps quản lý gọi API Elasticsearch, nên mọi thay đổi có version và dấu vết. Policy tùy chỉnh do ứng dụng tạo khi tạo workspace và tạo lại mỗi ngày nếu thiếu, dựa trên database của ứng dụng.</li>
+<li>Quản lý policy bằng <code>StackConfigPolicy</code> của operator cần license Enterprise nên không dùng.</li>
+</ul>
+
+<h2>Backup bằng snapshot</h2>
+<p>Snapshot ghi ra repository ngoài cluster theo lịch và là <b>tăng dần</b>: sau lần đầu chỉ chép phần thay đổi. Elasticsearch 8 trở lên ghi vào S3 không cần plugin.</p>
+<pre><code>PUT _snapshot/s3-backup
+{"type": "s3", "settings": {"bucket": "devstg-es-backup", "endpoint": "https://s3.example.com", "path_style_access": true}}
+
+PUT _slm/policy/daily
+{
+  "schedule": "0 30 1 * * ?",
+  "name": "&lt;daily-{now/d}&gt;",
+  "repository": "s3-backup",
+  "config": {"indices": "*"},
+  "retention": {"expire_after": "30d", "min_count": 5, "max_count": 50}
+}</code></pre>
+<p>Khóa truy cập S3 đưa vào keystore của Elasticsearch qua <code>spec.secureSettings</code> của resource ECK. Lịch snapshot và thời gian giữ snapshot do SLM policy quy định, giữ trong Git và áp bằng cùng Job.</p>
+
+<h2>Yêu cầu nền tảng</h2>
+<ul>
+<li>Đủ worker trên các host vật lý khác nhau. Block storage khoảng 1 TiB mỗi node production, 200 GiB cho staging.</li>
+<li>Backup storage S3. Kernel parameter <code>vm.max_map_count</code> trên worker.</li>
+</ul>
+</article>
+
+<!-- ============ TOOL: OTEL ============ -->
+<article class="page" data-id="tool-otel" data-group="Open-source tools" data-title="OpenTelemetry Collector" hidden>
+<h1>OpenTelemetry Collector và Operator</h1>
+<p class="lead">Collector nhận, xử lý và chuyển tiếp dữ liệu quan sát (log, metric, trace). Trong ví dụ này nó nhận lô log từ shipper (như Fluent Bit) và ghi sang Elasticsearch.</p>
+
+<h2>Hiện trạng và vấn đề</h2>
+<ul>
+<li>Một instance Collector Contrib chạy trong Docker Compose: không dự phòng, một điểm lỗi duy nhất.</li>
+<li>Hàng đợi gửi chỉ nằm <b>trong bộ nhớ</b>: lô log đang chờ sẽ mất khi container restart.</li>
+<li>Mở rộng thủ công, không hấp thụ được đỉnh tải.</li>
+</ul>
+<p>Phù hợp cho proof of concept nhưng không có khả năng chịu lỗi: một lần restart có thể làm rơi lặng lẽ các lô log đang gửi.</p>
+
+<h2>Cách tiếp cận</h2>
+<ul>
+<li><b>Dùng OpenTelemetry Operator</b> (cùng mô hình với ECK): khai báo resource <code>OpenTelemetryCollector</code> với phiên bản, số replica và cấu hình, operator sinh và giữ đồng bộ StatefulSet và Service.</li>
+<li><b>Chạy dạng StatefulSet, không phải Deployment:</b> mỗi Pod có volume riêng chứa hàng đợi gửi <b>trên đĩa</b>. Pod restart thì gắn lại volume của mình và gửi tiếp các lô còn trong hàng đợi.</li>
+<li><b>Không autoscale (không dùng HPA):</b> nếu Pod bị scale-down tự động thì không bảo đảm hàng đợi trên đĩa của Pod bị xóa đã gửi xong. Số replica cố định theo tải dự kiến.</li>
+<li>Chứng chỉ cho admission webhook của operator do cert-manager cấp.</li>
+</ul>
+
+<h2>Kích thước (nháp)</h2>
+<div class="tw"><table>
+<tr><th>Môi trường</th><th>Replica</th><th>RAM/Pod</th><th>Đĩa hàng đợi/Pod</th></tr>
+<tr><td>Development</td><td>1-2</td><td>512 MiB</td><td>2 GiB</td></tr>
+<tr><td>Staging, production</td><td>3</td><td>1 GiB</td><td>10 GiB (xác nhận theo tải thật)</td></tr>
+</table></div>
+
+<h2>Luồng yêu cầu</h2>
+<ol>
+<li>Log shipper gửi log qua HTTPS tới một <b>IngressRoute</b> của Traefik.</li>
+<li>Traefik áp ba middleware theo thứ tự: <code>forwardAuth</code> kiểm tra khóa nguồn, bước kế xóa header <code>Authorization</code>, và <code>rateLimit</code> tùy chọn giới hạn tốc độ.</li>
+<li>Để kiểm tra khóa, forwardAuth tra Redis và nếu miss thì tra PostgreSQL (không có dịch vụ xác thực riêng).</li>
+<li>Traffic được chấp nhận tới Service của Collector, phân tán sang các Pod, mỗi Pod có volume riêng.</li>
+<li>Mỗi Pod ghi sang Elasticsearch qua HTTPS.</li>
+</ol>
+<p>Client tới Traefik và Collector tới Elasticsearch dùng HTTPS, còn Traefik tới Collector là HTTP thường trong cluster. Khóa nguồn không bao giờ tới Collector vì Traefik đã xóa header.</p>
+
+<h2>Resource mẫu</h2>
+<pre><code>apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata: {name: gateway, namespace: logging}
+spec:
+  mode: statefulset
+  replicas: 3
+  image: otel/opentelemetry-collector-contrib:0.130.0
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {memory: 1Gi}
+  volumeClaimTemplates:
+    - metadata: {name: queue}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: block-rwo
+        resources: {requests: {storage: 10Gi}}
+  volumeMounts:
+    - {name: queue, mountPath: /var/lib/otelcol}
+  config:
+    extensions:
+      file_storage/queue:
+        directory: /var/lib/otelcol/queue
+    receivers:
+      otlp:
+        protocols:
+          http: {endpoint: 0.0.0.0:4318}
+    processors:
+      memory_limiter: {check_interval: 1s, limit_percentage: 75, spike_limit_percentage: 20}
+      batch: {}
+    exporters:
+      elasticsearch:
+        endpoints: ["https://logs-es-http.elastic.svc:9200"]
+        sending_queue:
+          enabled: true
+          storage: file_storage/queue     # hàng đợi nằm trên đĩa
+    service:
+      extensions: [file_storage/queue]
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]</code></pre>
+<p>Phần xác thực tới Elasticsearch (user, mật khẩu, CA) được lấy từ Secret và không ghi trong cấu hình. Dùng bản Contrib đầy đủ lúc đầu, về sau có thể build image Collector tối giản.</p>
+
+<h2>GitOps và thứ tự</h2>
+<ul>
+<li>Operator cài trước, resource <code>OpenTelemetryCollector</code> chỉ áp sau khi operator báo Ready (dùng <code>dependsOn</code> của Flux).</li>
+<li>Thay đổi cấu hình là một commit, operator tự tạo lại Pod theo thứ tự.</li>
+</ul>
+
+<h2>Vòng đời dữ liệu và backup</h2>
+<ul>
+<li>Component này <b>không giữ dữ liệu dài hạn</b>. Mỗi lô log chỉ nằm ngắn trong hàng đợi giữa lúc xử lý và lúc ghi thành công vào Elasticsearch. Nếu Elasticsearch tạm không sẵn sàng, hàng đợi giữ lô trên đĩa và thử lại. Không có thời gian lưu cần cấu hình.</li>
+<li>Volume hàng đợi <b>không cần backup snapshot</b>: nó là bộ đệm tạm. Mất nó chỉ mất tối đa vài phút đến vài giờ lô log đang bay, không mất khả năng tìm log lịch sử (nằm trong Elasticsearch và được backup riêng).</li>
+</ul>
+
+<h2>Quyết định còn mở</h2>
+<ul>
+<li>Số replica cố định cho staging và production (3 hay nhiều hơn, tùy lưu lượng thật).</li>
+<li>Dung lượng volume hàng đợi.</li>
+<li>Có build image Collector tối giản sau này hay không.</li>
+<li>Anti-affinity ở mức bắt buộc (<code>required</code>) hay ưu tiên (<code>preferred</code>).</li>
+</ul>
+</article>
+
+<!-- ============ TOOL: SANDBOX ============ -->
+<article class="page" data-id="tool-sandbox" data-group="Open-source tools" data-title="OpenSandbox và gVisor" hidden>
+<h1>OpenSandbox và gVisor: chạy code không tin cậy</h1>
+<p class="lead">OpenSandbox là dịch vụ mã nguồn mở (Apache-2.0) tạo môi trường cô lập, sống ngắn theo yêu cầu và chèn một daemon thực thi lệnh nhỏ (<code>execd</code>) vào từng môi trường. Mọi thứ chạy trong sandbox phải coi là code không tin cậy, ví dụ code do LLM sinh ra hay test trình duyệt tự động.</p>
+
+<h2>Vấn đề với mô hình Docker</h2>
+<div class="tw"><table>
+<tr><th>Khía cạnh</th><th>Hiện tại</th><th>Hệ quả</th></tr>
+<tr><td>Hosting</td><td>Một VM, Docker Compose</td><td>Điểm lỗi duy nhất, không rolling update.</td></tr>
+<tr><td>Cô lập</td><td>Container Docker thường, server mount Docker socket</td><td>Tài liệu của dự án gọi việc mount socket là “tương đương root trên host Docker”.</td></tr>
+<tr><td>Đặc quyền</td><td>Lệnh trong sandbox chạy với quyền root</td><td>Thoát khỏi sandbox nghĩa là chiếm host.</td></tr>
+<tr><td>Truy cập</td><td>Mỗi sandbox một cổng host động</td><td>Mô hình “một cổng một sandbox” không áp dụng được trên Kubernetes.</td></tr>
+</table></div>
+
+<h2>Cách tiếp cận trên Kubernetes</h2>
+<ul>
+<li><b>Dùng Kubernetes runtime có sẵn và operator của nó.</b> Server tạo resource <code>BatchSandbox</code> thay vì gọi Docker. Controller (cài từ Helm chart của dự án) biến mỗi resource thành một Pod và xóa Pod khi sandbox được trả hoặc hết hạn. Docker socket biến mất, không thành phần nào cần root trên node.</li>
+<li><b>Cô lập bằng node riêng và gVisor.</b> Pod sandbox chạy trên node chuyên dụng có taint, dưới <b>gVisor</b>: kernel chạy ở user space, chặn system call của sandbox, nên root trong sandbox không bao giờ chạm kernel của host. Node sandbox: 1 ở dev/stg, 2 ở production. Server và controller chạy trên worker thường. Ngoài sandbox, chỉ thành phần hệ thống ở cấp node (như agent Cilium) chạy trên node sandbox.</li>
+<li><b>Chỉ truy cập trong cluster.</b> Server chỉ tới được từ trong cluster. Client gọi <code>execd</code> trực tiếp trên địa chỉ Pod sandbox. Không có điểm vào công khai. Có thể tạm mở một hostname cho developer (giới hạn IP bằng Traefik) khi test và xóa lúc go-live.</li>
+<li><b>Mỗi mức tin cậy một namespace.</b> <code>opensandbox-system</code> (controller, đặc quyền nhất), <code>opensandbox</code> (server mà client nói chuyện), <code>opensandbox-workloads</code> (Pod sandbox, nơi chạy code không tin cậy). Mỗi namespace có policy bảo mật riêng.</li>
+<li><b>Một bản cài mỗi cluster</b> vì custom resource và controller có phạm vi toàn cluster. Ở dev/stg, development và staging dùng chung, client tách bằng namespace, quota và network policy.</li>
+<li><b>Giao qua GitOps</b>, trừ phần cài gVisor ở cấp node. Chart và image mirror nội bộ và ghim theo digest.</li>
+</ul>
+
+<h2>Cài gVisor trên node sandbox</h2>
+<pre><code># Ansible hoặc tay, chỉ trên node sandbox: cài runsc và shim cho containerd,
+# rồi khai báo runtime handler "runsc" cho containerd (cách cài thay đổi theo phiên bản gVisor).
+
+kubectl label node sbx-1 sandbox=true
+kubectl taint node sbx-1 sandbox=true:NoSchedule</code></pre>
+<pre><code>apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata: {name: gvisor}
+handler: runsc
+scheduling:
+  nodeSelector: {sandbox: "true"}
+  tolerations:
+    - {key: sandbox, operator: Equal, value: "true", effect: NoSchedule}</code></pre>
+<p>Pod muốn chạy sandbox chỉ cần <code>runtimeClassName: gvisor</code>: <code>RuntimeClass</code> tự đặt Pod lên node sandbox và gắn toleration. Tham số của gVisor cần chỉnh, gồm một thiết lập Cilium cho phép Pod gVisor truy cập Service trong cluster, được áp lúc dựng cluster. Cách cài gVisor có thể đổi theo thời gian, theo dõi tài liệu chính thức.</p>
+
+<h2>Các lớp kiểm soát bảo mật</h2>
+<p>Mỗi kiểm soát độc lập: nếu một lớp bị cấu hình sai hay bị vượt qua, các lớp còn lại vẫn có tác dụng.</p>
+<div class="tw"><table>
+<tr><th>Kiểm soát</th><th>Cách áp dụng</th><th>Rủi ro được giải quyết</th></tr>
+<tr><td>Cô lập workload</td><td>Node riêng có taint, RuntimeClass gVisor trên mọi Pod sandbox</td><td>Code không tin cậy chạm kernel host hoặc ứng dụng khác</td></tr>
+<tr><td>Pod Security</td><td>PSA trên cả ba namespace: <b>baseline enforce</b>, <b>restricted audit</b>. Namespace controller nâng lên restricted sau khi kiểm chứng. Baseline ghi đè mặc định restricted của profile CIS vì code sandbox chạy root bên trong gVisor</td><td>Pod đặc quyền, mount host, host networking</td></tr>
+<tr><td>Admission policy</td><td>Hai ValidatingAdmissionPolicy: Pod sandbox phải dùng gVisor và không mang API token; resource sandbox chỉ ở namespace workloads, bắt buộc gVisor, chặn snapshot</td><td>Server cấu hình sai hoặc resource tạo ở namespace khác bỏ qua các lớp còn lại</td></tr>
+<tr><td>Quyền tối thiểu</td><td>Quyền của server giới hạn trong một namespace (viết lại, thay role toàn cluster của chart); Pod sandbox không có token ServiceAccount</td><td>Server bị chiếm đọc secret toàn cluster; code sandbox gọi Kubernetes API</td></tr>
+<tr><td>Phân đoạn mạng</td><td>Default-deny hai chiều; chỉ client được duyệt tới server và <code>execd</code>; egress của sandbox chỉ gồm DNS và registry npm nội bộ</td><td>Code sandbox quét hoặc gọi hệ thống nội bộ</td></tr>
+<tr><td>Giới hạn tài nguyên</td><td>ResourceQuota (CPU, RAM, số Pod, số sandbox) và LimitRange (mặc định và tối đa, kể cả đĩa)</td><td>Một sandbox hoặc client chạy mất kiểm soát làm cạn node</td></tr>
+<tr><td>Secret</td><td>API key trong Vault, đồng bộ bằng Vault Secrets Operator; token <code>execd</code>; cả hai xoay vòng lúc go-live</td><td>Credential trong Git, ConfigMap hay image</td></tr>
+<tr><td>Chuỗi cung ứng và drift</td><td>Chart và image mirror nội bộ, ghim digest; Flux phát hiện drift và hoàn tác thay đổi tay</td><td>Image bị thay, thay đổi không theo dõi</td></tr>
+</table></div>
+<pre><code># Namespace sandbox: PSA baseline enforce, restricted audit
+kubectl label ns opensandbox-workloads \
+  pod-security.kubernetes.io/enforce=baseline \
+  pod-security.kubernetes.io/audit=restricted
+
+# Quota và giới hạn mặc định
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: sandbox-quota, namespace: opensandbox-workloads}
+spec:
+  hard: {pods: "40", requests.cpu: "32", requests.memory: 96Gi, limits.memory: 128Gi}
+---
+apiVersion: v1
+kind: LimitRange
+metadata: {name: sandbox-limits, namespace: opensandbox-workloads}
+spec:
+  limits:
+    - type: Container
+      default: {cpu: "1", memory: 1Gi, ephemeral-storage: 2Gi}
+      defaultRequest: {cpu: 250m, memory: 256Mi}
+      max: {cpu: "4", memory: 8Gi, ephemeral-storage: 10Gi}</code></pre>
+<pre><code># Egress của sandbox: chỉ DNS và registry npm nội bộ
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: sandbox-egress, namespace: opensandbox-workloads}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - ipBlock: {cidr: 10.0.20.15/32}       # registry npm nội bộ
+      ports: [{port: 443, protocol: TCP}]</code></pre>
+<div class="callout warn"><b>Rủi ro được chấp nhận: quyền của controller</b><p>Role của controller trong chart của dự án có thể tạo Pod ở namespace bất kỳ và đọc secret toàn cluster, và chart không cho thu hẹp. Giảm thiểu bằng admission policy giới hạn namespace, mức PSA restricted, network policy chỉ cho controller gọi Kubernetes API, và image ghim digest.</p></div>
+
+<h2>Luồng một yêu cầu</h2>
+<ol>
+<li><b>Yêu cầu sandbox:</b> ứng dụng xin server một sandbox, xác thực bằng API key. Network policy chỉ cho client được duyệt tới server.</li>
+<li><b>Server tạo BatchSandbox:</b> API server kiểm tra quyền của server (RBAC, chỉ trong namespace workloads), admission policy (đúng namespace, yêu cầu gVisor, không phải snapshot) và quota.</li>
+<li><b>Controller tạo Pod sandbox:</b> bộ kiểm tra thứ hai: LimitRange, PSA baseline, admission policy từ chối Pod thiếu gVisor hoặc có API token, và quota. RuntimeClass đặt Pod lên node sandbox.</li>
+<li><b>Chạy lệnh:</b> client gửi lệnh thẳng tới <code>execd</code> trên địa chỉ Pod, xác thực bằng token execd. Từ bên trong, sandbox chỉ tới được DNS và registry npm nội bộ; mạng nội bộ, internet và Kubernetes API đều bị chặn.</li>
+</ol>
+<p>Server không chuyển tiếp traffic lệnh, chỉ quản lý vòng đời sandbox. Restart server không ảnh hưởng sandbox đang chạy vì trạng thái nằm trong resource <code>BatchSandbox</code>.</p>
+
+<h2>Lộ trình triển khai</h2>
+<div class="tw"><table>
+<tr><th>Giai đoạn</th><th>Phạm vi</th></tr>
+<tr><td>1</td><td>Node sandbox: taint, runtime gVisor, RuntimeClass</td></tr>
+<tr><td>2</td><td>Guardrail: namespace, Pod Security, admission policy, quota</td></tr>
+<tr><td>3</td><td>Controller (operator và CRD)</td></tr>
+<tr><td>4</td><td>Server</td></tr>
+<tr><td>5</td><td>Network policy</td></tr>
+<tr><td>6</td><td>Truy cập tạm cho developer (tùy chọn)</td></tr>
+<tr><td>7</td><td>Kiểm thử, chuyển từ VM cũ, xóa truy cập tạm, xoay vòng credential</td></tr>
+</table></div>
+<p>VM cũ chạy tiếp đến lúc chuyển, để ứng dụng luôn có phương án dự phòng.</p>
+
+<h2>Dữ liệu, backup và yêu cầu nền tảng</h2>
+<ul>
+<li>OpenSandbox <b>không giữ dữ liệu dài hạn</b>. Trạng thái mỗi sandbox nằm trong resource <code>BatchSandbox</code> do Kubernetes lưu. Database cục bộ của server chỉ ghi metadata snapshot, mà snapshot không dùng (gVisor không hỗ trợ), nên server dùng lưu trữ tạm, không cần PersistentVolume. Sandbox bị xóa khi client trả hoặc hết hạn. Không cần backup gì ngoài manifest trong repo GitOps.</li>
+<li>Cần: node sandbox chuyên dụng (1 ở dev/stg, 2 ở production), runtime gVisor trên chúng, thiết lập Cilium cho Pod gVisor, và Flux có đủ quyền khi dựng cluster.</li>
+</ul>
 </article>
 
     <footer>
