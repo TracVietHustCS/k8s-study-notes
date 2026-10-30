@@ -1,0 +1,1364 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kubernetes study notes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --blue:#326ce5; --blue-d:#2455bd; --navbg:#326ce5;
+  --bg:#ffffff; --side:#fafbfc; --ink:#202124; --muted:#5f6368; --line:#e1e4e8;
+  --link:#2558c7; --code:#f3f5f8; --codeink:#1f2933;
+  --note:#e8f0fe; --note-b:#326ce5; --tip:#e6f4ea; --tip-b:#1e8e3e; --warn:#fff4e5; --warn-b:#e37400;
+  --font:"Roboto",system-ui,-apple-system,"Segoe UI",Arial,sans-serif;
+  --mono:"Roboto Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --navbg:#23469e; --bg:#0f141b; --side:#0f141b; --ink:#e4e8ee; --muted:#9aa5b1; --line:#252f3c;
+    --link:#8ab0ff; --code:#171f2a; --codeink:#dbe4ee;
+    --note:#14233f; --note-b:#5b8cf0; --tip:#10261a; --tip-b:#3fb860; --warn:#2b200f; --warn-b:#f0a03c; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --navbg:#23469e; --bg:#0f141b; --side:#0f141b; --ink:#e4e8ee; --muted:#9aa5b1; --line:#252f3c;
+  --link:#8ab0ff; --code:#171f2a; --codeink:#dbe4ee;
+  --note:#14233f; --note-b:#5b8cf0; --tip:#10261a; --tip-b:#3fb860; --warn:#2b200f; --warn-b:#f0a03c; color-scheme:dark;
+}
+html{height:100%;scroll-padding-top:calc(env(safe-area-inset-top,0px) + 72px)}
+*{box-sizing:border-box}
+body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:16px;line-height:1.65}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--navbg);z-index:40}
+a{color:var(--link)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:3px}
+
+/* navbar */
+.nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;height:56px;background:var(--navbg);color:#fff;
+  display:flex;align-items:center;gap:18px;padding:0 20px}
+.brand{display:flex;align-items:center;gap:10px;color:#fff;text-decoration:none;font-weight:500;font-size:18px;white-space:nowrap}
+.brand svg{width:34px;height:34px;flex:none}
+.nav .links{display:flex;gap:18px;font-size:14px}
+.nav .links a{color:#fff;text-decoration:none;opacity:.9}
+.nav .links a:hover{opacity:1;text-decoration:underline}
+.nav .sp{flex:1}
+.search{position:relative;width:260px;max-width:40vw}
+.search input{width:100%;height:34px;border:0;border-radius:4px;padding:0 12px;font:inherit;font-size:14px;
+  background:rgba(255,255,255,.18);color:#fff}
+.search input::placeholder{color:rgba(255,255,255,.8)}
+.search input:focus{background:#fff;color:#202124;outline:2px solid #fff}
+.search input:focus::placeholder{color:#6b7280}
+.ibtn{background:transparent;border:1px solid rgba(255,255,255,.45);color:#fff;border-radius:4px;height:32px;padding:0 10px;
+  font:inherit;font-size:13px;cursor:pointer}
+.ibtn:hover{background:rgba(255,255,255,.14)}
+#burger{display:none;font-size:18px;padding:0 10px}
+
+/* layout */
+.shell{display:grid;grid-template-columns:290px minmax(0,1fr) 240px;max-width:1500px;margin:0 auto}
+aside#side{position:sticky;top:calc(56px + env(safe-area-inset-top,0px));align-self:start;
+  height:calc(100vh - 56px - env(safe-area-inset-top,0px));overflow-y:auto;background:var(--side);
+  border-right:1px solid var(--line);padding:16px 12px 40px}
+.prog{font-size:13px;color:var(--muted);margin:0 8px 12px}
+.prog i{display:block;height:4px;background:var(--line);border-radius:2px;margin-top:6px;overflow:hidden}
+.prog i b{display:block;height:100%;background:var(--blue);width:0}
+.grp h3{font-size:12px;font-weight:700;color:var(--muted);margin:16px 8px 4px;letter-spacing:.02em}
+#side a{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:4px;color:var(--ink);text-decoration:none;font-size:14px;line-height:1.35}
+#side a:hover{background:var(--code)}
+#side a.on{color:var(--blue);background:var(--note);font-weight:500}
+#side a.read::after{content:"✓";margin-left:auto;color:var(--tip-b);font-size:12px}
+.none{display:none;margin:16px 8px;font-size:14px;color:var(--muted)}
+#side a.by{margin:24px 4px 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;gap:10px;color:var(--ink)}
+#side a.by:hover{border-color:var(--blue);background:transparent}
+#side a.by span{display:flex;flex-direction:column;line-height:1.25}
+#side a.by small{color:var(--muted);font-size:12px}
+
+main{padding:28px 44px 80px;min-width:0}
+.crumb{font-size:13px;color:var(--muted);margin-bottom:6px}
+.page h1{font-size:34px;font-weight:500;line-height:1.2;margin:0 0 14px}
+.lead{font-size:18px;color:var(--muted);margin:0 0 8px;max-width:70ch}
+.page h2{font-size:24px;font-weight:500;margin:40px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.page h3{font-size:18px;font-weight:500;margin:26px 0 6px}
+.page p,.page li{max-width:76ch}
+.page ul,.page ol{padding-left:24px}
+.page li{margin:3px 0}
+code{font-family:var(--mono);font-size:.86em;background:var(--code);color:var(--codeink);padding:2px 5px;border-radius:3px}
+pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:6px;padding:14px 16px;overflow-x:auto;margin:14px 0;line-height:1.5}
+pre code{background:none;padding:0;font-size:13px;white-space:pre}
+.copy{position:absolute;top:6px;right:6px;font:inherit;font-size:12px;background:var(--bg);color:var(--muted);border:1px solid var(--line);
+  border-radius:4px;padding:2px 8px;cursor:pointer}
+.copy:hover{color:var(--ink)}
+.tw{overflow-x:auto;margin:14px 0}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:520px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;vertical-align:top}
+th{background:var(--code);font-weight:500}
+.callout{border-left:4px solid var(--note-b);background:var(--note);padding:10px 16px;margin:18px 0;border-radius:0 6px 6px 0;max-width:76ch}
+.callout p{margin:4px 0}
+.callout>b:first-child{display:block;margin-bottom:2px}
+.callout.tip{background:var(--tip);border-color:var(--tip-b)}
+.callout.warn{background:var(--warn);border-color:var(--warn-b)}
+.dg{width:100%;height:auto;margin:16px 0;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+.dg .box{fill:var(--bg);stroke:var(--blue);stroke-width:1.5}
+.dg .zone{fill:var(--code);stroke:var(--line);stroke-width:1.5}
+.dg .pod{fill:var(--note);stroke:var(--note-b);stroke-width:1}
+.dg text{fill:var(--ink);font-family:var(--font);font-size:13px}
+.dg .zt{font-weight:700;font-size:13px}
+.dg .ln{stroke:var(--blue);stroke-width:1.5;fill:none}
+.dg .dash{stroke-dasharray:5 4}
+
+.mark{display:flex;align-items:center;gap:10px;margin:40px 0 0;padding-top:20px;border-top:1px solid var(--line)}
+.mark button{font:inherit;font-size:14px;border:1px solid var(--blue);color:var(--blue);background:transparent;border-radius:4px;padding:6px 14px;cursor:pointer}
+.mark button[aria-pressed="true"]{background:var(--blue);color:#fff}
+.pn{display:flex;justify-content:space-between;gap:12px;margin-top:20px}
+.pn a{display:block;border:1px solid var(--line);border-radius:6px;padding:10px 16px;text-decoration:none;color:var(--ink);max-width:48%}
+.pn a:hover{border-color:var(--blue)}
+.pn small{display:block;color:var(--muted);font-size:12px}
+.pn a:last-child{text-align:right;margin-left:auto}
+
+nav#toc{position:sticky;top:calc(56px + env(safe-area-inset-top,0px));align-self:start;
+  max-height:calc(100vh - 56px - env(safe-area-inset-top,0px));overflow-y:auto;padding:28px 16px 40px 0;font-size:13.5px}
+#toc h4{margin:0 0 8px;font-size:12px;color:var(--muted);font-weight:700}
+#toc a{display:block;padding:3px 0 3px 12px;border-left:2px solid var(--line);color:var(--muted);text-decoration:none;line-height:1.4}
+#toc a.l3{padding-left:26px}
+#toc a:hover{color:var(--ink)}
+#toc a.on{color:var(--blue);border-left-color:var(--blue);font-weight:500}
+footer{border-top:1px solid var(--line);margin-top:48px;padding-top:16px;font-size:13px;color:var(--muted)}
+#scrim{display:none}
+
+@media (max-width:1100px){.shell{grid-template-columns:270px minmax(0,1fr)}nav#toc{display:none}}
+@media (max-width:820px){
+  .shell{grid-template-columns:1fr}
+  .nav .links{display:none}
+  #burger{display:inline-block}
+  .brand span{font-size:16px}
+  aside#side{position:fixed;left:0;bottom:0;top:calc(56px + env(safe-area-inset-top,0px));height:auto;width:300px;max-width:86vw;z-index:25;
+    transform:translateX(-102%);transition:transform .2s}
+  aside#side.open{transform:none}
+  #scrim.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:20}
+  main{padding:20px 16px 64px}
+  .page h1{font-size:28px}
+  .search{width:auto;flex:1;max-width:none}
+  .sp{display:none}
+}
+@media (prefers-reduced-motion:reduce){aside#side{transition:none}}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <button class="ibtn" id="burger" aria-label="Mở mục lục">☰</button>
+  <a class="brand" href="#overview" aria-label="Kubernetes study notes">
+    <svg viewBox="0 0 100 100" role="img" aria-hidden="true">
+      <defs><line id="spoke" x1="50" y1="50" x2="50" y2="22" stroke="#fff" stroke-width="5" stroke-linecap="round"/></defs>
+      <polygon points="50,4 86,21.3 94.8,60.2 70,91.5 30,91.5 5.2,60.2 14,21.3" fill="#fff" stroke="#fff" stroke-width="6" stroke-linejoin="round"/>
+      <polygon points="50,4 86,21.3 94.8,60.2 70,91.5 30,91.5 5.2,60.2 14,21.3" fill="#326ce5" transform="translate(50 50) scale(.9) translate(-50 -50)" stroke="#326ce5" stroke-width="6" stroke-linejoin="round"/>
+      <circle cx="50" cy="50" r="19" fill="none" stroke="#fff" stroke-width="5"/>
+      <circle cx="50" cy="50" r="5" fill="#fff"/>
+      <use href="#spoke"/><use href="#spoke" transform="rotate(51.43 50 50)"/><use href="#spoke" transform="rotate(102.86 50 50)"/>
+      <use href="#spoke" transform="rotate(154.29 50 50)"/><use href="#spoke" transform="rotate(205.71 50 50)"/>
+      <use href="#spoke" transform="rotate(257.14 50 50)"/><use href="#spoke" transform="rotate(308.57 50 50)"/>
+    </svg>
+    <span>Kubernetes <span style="font-weight:400;opacity:.85">study notes</span></span>
+  </a>
+  <nav class="links" aria-label="Liên kết nhanh">
+    <a href="#architecture">Kiến trúc</a>
+    <a href="#workloads">Workloads</a>
+    <a href="#services">Networking</a>
+    <a href="#kubectl">kubectl</a>
+    <a href="https://github.com/TracVietHustCS" target="_blank" rel="noopener">@TracVietHustCS</a>
+  </nav>
+  <span class="sp"></span>
+  <div class="search"><input id="q" type="search" placeholder="Tìm trong ghi chú  ( / )" aria-label="Tìm trong ghi chú"></div>
+  <button class="ibtn" id="theme" aria-label="Đổi giao diện sáng/tối">Sáng/Tối</button>
+</header>
+<div id="scrim"></div>
+
+<div class="shell">
+  <aside id="side" aria-label="Mục lục">
+    <div class="prog"><span id="progtxt"></span><i><b id="progbar"></b></i></div>
+    <div id="side-links"></div>
+    <p class="none" id="none">Không có trang nào khớp từ khóa.</p>
+    <a class="by" href="https://github.com/TracVietHustCS" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.5 7.5 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span><b>TracViet</b><small>@TracVietHustCS</small></span>
+    </a>
+  </aside>
+
+  <main id="main">
+
+<!-- ============ OVERVIEW ============ -->
+<article class="page" data-id="overview" data-group="Giới thiệu" data-title="Kubernetes là gì?" hidden>
+<h1>Kubernetes là gì?</h1>
+<p class="lead">Kubernetes (viết tắt K8s, vì có 8 chữ cái giữa “K” và “s”) là nền tảng mã nguồn mở để tự động hóa việc triển khai, mở rộng và vận hành ứng dụng đóng gói bằng container.</p>
+<p>Dự án khởi nguồn từ Google, kế thừa kinh nghiệm chạy hệ thống nội bộ Borg. Kubernetes được công bố năm 2014, bản 1.0 ra năm 2015 và được trao cho CNCF (Cloud Native Computing Foundation) quản lý.</p>
+
+<h2>Kubernetes giải quyết vấn đề gì?</h2>
+<p>Chạy một container bằng <code>docker run</code> thì dễ. Chạy hàng trăm container trên nhiều máy, luôn sống, cập nhật không downtime thì cần một hệ điều phối.</p>
+<div class="tw"><table>
+<tr><th>Nhu cầu</th><th>Kubernetes làm gì</th></tr>
+<tr><td>Điều phối (scheduling)</td><td>Chọn node phù hợp để chạy Pod dựa trên CPU, RAM, ràng buộc.</td></tr>
+<tr><td>Tự phục hồi (self-healing)</td><td>Container chết thì khởi động lại, node chết thì tạo lại Pod ở node khác, không route traffic đến Pod chưa sẵn sàng.</td></tr>
+<tr><td>Mở rộng (scaling)</td><td>Tăng giảm số bản sao bằng tay hoặc tự động theo metric.</td></tr>
+<tr><td>Cập nhật an toàn</td><td>Rolling update và rollback khi có lỗi.</td></tr>
+<tr><td>Service discovery và load balancing</td><td>Mỗi nhóm Pod có một địa chỉ và tên DNS ổn định.</td></tr>
+<tr><td>Cấu hình và bí mật</td><td>Tách config và secret khỏi image.</td></tr>
+<tr><td>Lưu trữ</td><td>Gắn volume từ nhiều loại storage khác nhau vào Pod.</td></tr>
+</table></div>
+
+<h2>Tư duy cốt lõi</h2>
+<ul>
+<li><b>Declarative:</b> bạn mô tả trạng thái mong muốn (desired state) trong file YAML, không ra lệnh từng bước.</li>
+<li><b>Reconciliation loop:</b> các controller liên tục so sánh trạng thái thực tế (actual state) với desired state rồi hành động để hai bên khớp nhau.</li>
+<li><b>API là trung tâm:</b> mọi thứ là một object trong API server. <code>kubectl</code>, controller, kubelet đều chỉ là client của API.</li>
+<li><b>Pod là tạm thời:</b> Pod bị thay thế chứ không được “sửa tại chỗ”. Đừng phụ thuộc vào IP hay tên của một Pod cụ thể.</li>
+<li><b>Liên kết lỏng bằng label:</b> Service, Deployment tìm Pod qua label selector, không qua tên.</li>
+</ul>
+<div class="callout"><b>Ghi chú</b><p>Kubernetes không phải PaaS đầy đủ. Nó không build code, không có sẵn stack logging, monitoring hay CI/CD. Bạn ghép các công cụ đó vào xung quanh.</p></div>
+
+<h2>Thuật ngữ nhanh</h2>
+<div class="tw"><table>
+<tr><th>Thuật ngữ</th><th>Ý nghĩa</th></tr>
+<tr><td>Cluster</td><td>Tập hợp các máy (node) do Kubernetes quản lý.</td></tr>
+<tr><td>Node</td><td>Một máy (VM hoặc vật lý) chạy workload.</td></tr>
+<tr><td>Control plane</td><td>Bộ não của cluster: API server, etcd, scheduler, controller manager.</td></tr>
+<tr><td>Pod</td><td>Đơn vị triển khai nhỏ nhất, gồm một hoặc nhiều container dùng chung network và volume.</td></tr>
+<tr><td>Workload</td><td>Ứng dụng chạy trên K8s, quản lý qua Deployment, StatefulSet, Job…</td></tr>
+<tr><td>Namespace</td><td>Phân vùng logic để chia tài nguyên và quyền trong cluster.</td></tr>
+<tr><td>Manifest</td><td>File YAML/JSON mô tả một hoặc nhiều object.</td></tr>
+</table></div>
+
+<h2>Môi trường để học</h2>
+<ul>
+<li><b>Local:</b> <code>kind</code> (cluster chạy trong Docker), <code>minikube</code>, <code>k3s</code>, Kubernetes trong Docker Desktop.</li>
+<li><b>Tự dựng:</b> <code>kubeadm</code> trên VM để hiểu rõ từng thành phần.</li>
+<li><b>Managed:</b> EKS (AWS), GKE (Google), AKS (Azure). Nhà cung cấp lo control plane.</li>
+</ul>
+<pre><code>kind create cluster --name lab
+kubectl cluster-info
+kubectl get nodes</code></pre>
+</article>
+
+<!-- ============ ARCHITECTURE ============ -->
+<article class="page" data-id="architecture" data-group="Giới thiệu" data-title="Kiến trúc cluster" hidden>
+<h1>Kiến trúc cluster</h1>
+<p class="lead">Một cluster gồm control plane (ra quyết định) và các worker node (chạy ứng dụng).</p>
+
+<svg class="dg" viewBox="0 0 760 410" role="img" aria-label="Sơ đồ kiến trúc: control plane gồm etcd, kube-apiserver, scheduler, controller-manager, cloud-controller-manager; hai worker node gồm kubelet, kube-proxy, container runtime và các Pod">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--blue)"/></marker>
+    <g id="wn">
+      <rect class="zone" x="20" y="238" width="350" height="152" rx="8"/>
+      <text class="zt" x="34" y="260">Worker node</text>
+      <rect class="box" x="34" y="270" width="96" height="34" rx="5"/><text x="82" y="292" text-anchor="middle">kubelet</text>
+      <rect class="box" x="140" y="270" width="100" height="34" rx="5"/><text x="190" y="292" text-anchor="middle">kube-proxy</text>
+      <rect class="box" x="250" y="270" width="106" height="34" rx="5"/><text x="303" y="292" text-anchor="middle">containerd</text>
+      <rect class="pod" x="34" y="326" width="102" height="48" rx="8"/><text x="85" y="355" text-anchor="middle">Pod</text>
+      <rect class="pod" x="148" y="326" width="102" height="48" rx="8"/><text x="199" y="355" text-anchor="middle">Pod</text>
+      <rect class="pod" x="262" y="326" width="94" height="48" rx="8"/><text x="309" y="355" text-anchor="middle">Pod</text>
+    </g>
+  </defs>
+  <rect class="zone" x="20" y="14" width="720" height="192" rx="8"/>
+  <text class="zt" x="34" y="34">Control plane</text>
+  <rect class="box" x="200" y="46" width="150" height="46" rx="5"/><text x="275" y="74" text-anchor="middle">etcd</text>
+  <rect class="box" x="410" y="46" width="170" height="46" rx="5"/><text x="495" y="74" text-anchor="middle">kube-apiserver</text>
+  <line class="ln" x1="352" y1="69" x2="408" y2="69" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <line class="ln" x1="495" y1="92" x2="495" y2="118"/>
+  <line class="ln" x1="150" y1="118" x2="620" y2="118"/>
+  <line class="ln" x1="150" y1="118" x2="150" y2="140" marker-end="url(#ar)"/>
+  <line class="ln" x1="385" y1="118" x2="385" y2="140" marker-end="url(#ar)"/>
+  <line class="ln" x1="620" y1="118" x2="620" y2="140" marker-end="url(#ar)"/>
+  <rect class="box" x="60" y="144" width="180" height="46" rx="5"/><text x="150" y="172" text-anchor="middle">kube-scheduler</text>
+  <rect class="box" x="290" y="144" width="190" height="46" rx="5"/><text x="385" y="172" text-anchor="middle">kube-controller-manager</text>
+  <rect class="box" x="530" y="144" width="180" height="46" rx="5"/><text x="620" y="172" text-anchor="middle">cloud-controller-manager</text>
+  <line class="ln dash" x1="190" y1="206" x2="190" y2="238" marker-end="url(#ar)"/>
+  <line class="ln dash" x1="560" y1="206" x2="560" y2="238" marker-end="url(#ar)"/>
+  <text x="200" y="226">HTTPS :6443</text>
+  <use href="#wn"/><use href="#wn" x="370"/>
+</svg>
+
+<h2>Control plane và data plane</h2>
+<p><b>Control plane</b> quản lý trạng thái cluster. Nó thường chạy trên các node riêng (master / control-plane node) và không chạy workload của người dùng. <b>Data plane</b> là các worker node, nơi Pod thực sự chạy.</p>
+<div class="callout"><b>Ghi nhớ</b><p>Mô hình hub-and-spoke: mọi thành phần chỉ nói chuyện với <code>kube-apiserver</code>. Scheduler không gọi kubelet trực tiếp mà ghi quyết định vào API, kubelet tự đọc về.</p></div>
+
+<h2>Cổng thường gặp</h2>
+<div class="tw"><table>
+<tr><th>Thành phần</th><th>Cổng</th><th>Ghi chú</th></tr>
+<tr><td>kube-apiserver</td><td>6443</td><td>HTTPS, điểm vào duy nhất của cluster</td></tr>
+<tr><td>etcd</td><td>2379 / 2380</td><td>client / peer</td></tr>
+<tr><td>kubelet</td><td>10250</td><td>API của kubelet</td></tr>
+<tr><td>kube-scheduler</td><td>10259</td><td>HTTPS</td></tr>
+<tr><td>kube-controller-manager</td><td>10257</td><td>HTTPS</td></tr>
+<tr><td>NodePort Services</td><td>30000–32767</td><td>dải mặc định</td></tr>
+</table></div>
+
+<h2>Tính sẵn sàng cao (HA)</h2>
+<ul>
+<li>Chạy nhiều control-plane node (thường 3). API server không giữ state nên đặt sau load balancer.</li>
+<li>Scheduler và controller manager chạy nhiều bản nhưng chỉ một bản là leader tại một thời điểm (leader election).</li>
+<li>etcd dùng thuật toán Raft, cần đa số (quorum = n/2 + 1) thành viên sống. Dùng số lẻ: 3 chịu được mất 1, 5 chịu được mất 2.</li>
+<li>Topology: <i>stacked</i> (etcd chạy chung node control plane) hoặc <i>external</i> (cụm etcd riêng).</li>
+</ul>
+</article>
+
+<!-- ============ CONTROL PLANE ============ -->
+<article class="page" data-id="controlplane" data-group="Thành phần" data-title="Control plane" hidden>
+<h1>Các thành phần control plane</h1>
+<p class="lead">Năm thành phần ra quyết định và lưu trạng thái của cluster.</p>
+
+<h2>kube-apiserver</h2>
+<p>Cửa ngõ REST của cluster. Mọi client (kubectl, kubelet, controller) đều qua nó. Nó là thành phần duy nhất đọc ghi etcd.</p>
+<p>Một request đi qua các bước:</p>
+<ol>
+<li><b>Authentication:</b> bạn là ai (client cert, bearer token, OIDC, ServiceAccount token).</li>
+<li><b>Authorization:</b> bạn có được làm việc này không (thường là RBAC).</li>
+<li><b>Admission control:</b> mutating admission (có thể sửa object) rồi validating admission (chỉ chấp nhận hoặc từ chối).</li>
+<li><b>Validation và lưu vào etcd.</b></li>
+</ol>
+<p>API server còn hỗ trợ cơ chế <b>watch</b>: client mở kết nối dài và nhận sự kiện khi object thay đổi. Đây là cách controller, scheduler, kubelet phản ứng gần như tức thời.</p>
+
+<h2>etcd</h2>
+<p>Key-value store phân tán, nhất quán mạnh, lưu toàn bộ trạng thái cluster (Pod, Secret, ConfigMap…). Mất etcd mà không có backup là mất cluster.</p>
+<pre><code>ETCDCTL_API=3 etcdctl snapshot save backup.db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key</code></pre>
+<div class="callout warn"><b>Cẩn thận</b><p>Secret trong etcd chỉ được mã hóa nếu bạn bật encryption at rest. Mặc định chúng chỉ là base64.</p></div>
+
+<h2>kube-scheduler</h2>
+<p>Theo dõi các Pod chưa có <code>spec.nodeName</code> và chọn node cho chúng, qua hai pha:</p>
+<ol>
+<li><b>Filtering:</b> loại node không đủ điều kiện (thiếu tài nguyên, không khớp nodeSelector hoặc affinity, có taint không tolerate…).</li>
+<li><b>Scoring:</b> chấm điểm các node còn lại (cân bằng tài nguyên, image đã có sẵn, spread…), chọn điểm cao nhất.</li>
+</ol>
+<p>Cuối cùng scheduler tạo một <i>binding</i> ghi tên node vào Pod. Scheduler chỉ quyết định, kubelet mới là bên chạy Pod.</p>
+
+<h2>kube-controller-manager</h2>
+<p>Một tiến trình chạy nhiều controller. Mỗi controller là một vòng lặp:</p>
+<pre><code>for {
+  desired := đọc spec từ API
+  actual  := quan sát trạng thái thực tế
+  if desired != actual { hành động để đưa actual về desired }
+}</code></pre>
+<div class="tw"><table>
+<tr><th>Controller</th><th>Việc chính</th></tr>
+<tr><td>Node</td><td>Theo dõi node, đánh dấu NotReady, evict Pod khi node mất liên lạc quá lâu.</td></tr>
+<tr><td>ReplicaSet / Deployment</td><td>Giữ đúng số Pod, điều khiển rolling update.</td></tr>
+<tr><td>Job / CronJob</td><td>Tạo Pod chạy tới khi hoàn thành, chạy theo lịch.</td></tr>
+<tr><td>EndpointSlice</td><td>Cập nhật danh sách IP Pod đứng sau Service.</td></tr>
+<tr><td>ServiceAccount, Namespace</td><td>Tạo ServiceAccount mặc định, dọn dẹp khi xóa namespace.</td></tr>
+</table></div>
+
+<h2>cloud-controller-manager</h2>
+<p>Chứa logic gắn với nhà cung cấp cloud: Node controller (xác nhận node còn tồn tại trên cloud), Route controller, Service controller (tạo cloud load balancer cho Service loại LoadBalancer). Cluster on-prem có thể không có thành phần này.</p>
+</article>
+
+<!-- ============ NODE COMPONENTS ============ -->
+<article class="page" data-id="nodecomp" data-group="Thành phần" data-title="Node và addons" hidden>
+<h1>Thành phần trên Node và addons</h1>
+<p class="lead">Mỗi worker node cần ba thứ: kubelet, kube-proxy và container runtime.</p>
+
+<h2>kubelet</h2>
+<p>Agent chạy trên mỗi node, không chạy trong container mà thường là một dịch vụ systemd.</p>
+<ul>
+<li>Đăng ký node với API server và báo cáo trạng thái, tài nguyên (heartbeat qua đối tượng <code>Lease</code>).</li>
+<li>Theo dõi các Pod được gán cho node và gọi container runtime qua CRI để chạy chúng.</li>
+<li>Chạy liveness, readiness, startup probe và báo kết quả.</li>
+<li>Mount volume, tải Secret, ConfigMap vào Pod.</li>
+<li>Chỉ quản lý container do Kubernetes tạo.</li>
+</ul>
+<p><b>Static Pod:</b> kubelet có thể chạy Pod từ file manifest trong một thư mục trên node (thường <code>/etc/kubernetes/manifests</code>) mà không cần API server. kubeadm dùng cách này để chạy apiserver, etcd, scheduler, controller-manager.</p>
+
+<h2>kube-proxy</h2>
+<p>Cài đặt các quy tắc mạng trên node để biến địa chỉ ảo của Service thành địa chỉ Pod thật và cân bằng tải. Các chế độ: <code>iptables</code> (phổ biến), <code>ipvs</code>, và <code>nftables</code> ở bản mới. Một số CNI như Cilium có thể thay thế hoàn toàn kube-proxy.</p>
+
+<h2>Container runtime</h2>
+<p>Phần mềm thực sự chạy container. Kubernetes giao tiếp với nó qua <b>CRI</b> (Container Runtime Interface).</p>
+<ul>
+<li><b>containerd</b> và <b>CRI-O</b> là hai runtime phổ biến, dùng chuẩn OCI.</li>
+<li>Docker Engine không còn được hỗ trợ trực tiếp từ bản 1.24 khi <code>dockershim</code> bị gỡ. Image build bằng Docker vẫn chạy bình thường.</li>
+<li>Công cụ debug trên node: <code>crictl</code>.</li>
+</ul>
+
+<h2>Addons quan trọng</h2>
+<div class="tw"><table>
+<tr><th>Addon</th><th>Vai trò</th></tr>
+<tr><td>CoreDNS</td><td>DNS của cluster, phân giải tên Service và Pod.</td></tr>
+<tr><td>CNI plugin</td><td>Cấp IP và nối mạng cho Pod (Calico, Cilium, Flannel, Weave…). Cluster không có CNI thì node ở trạng thái NotReady.</td></tr>
+<tr><td>metrics-server</td><td>Thu CPU, RAM cho <code>kubectl top</code> và HPA.</td></tr>
+<tr><td>Ingress controller</td><td>Thực thi các Ingress (NGINX, Traefik, HAProxy…).</td></tr>
+<tr><td>CSI driver</td><td>Cung cấp storage từ cloud hoặc hệ thống lưu trữ ngoài.</td></tr>
+<tr><td>Dashboard</td><td>Giao diện web (tùy chọn).</td></tr>
+</table></div>
+</article>
+
+<!-- ============ FLOW ============ -->
+<article class="page" data-id="flow" data-group="Thành phần" data-title="Luồng kubectl apply" hidden>
+<h1>Chuyện gì xảy ra khi chạy kubectl apply?</h1>
+<p class="lead">Ví dụ kinh điển để hiểu cách các thành phần phối hợp. Giả sử bạn chạy <code>kubectl apply -f deployment.yaml</code> với replicas = 3.</p>
+<ol>
+<li><b>kubectl</b> đọc file, đọc kubeconfig, gửi HTTPS request tới kube-apiserver.</li>
+<li><b>API server</b> xác thực, phân quyền, chạy admission, validate rồi ghi object <code>Deployment</code> vào <b>etcd</b>.</li>
+<li><b>Deployment controller</b> (watch API) thấy Deployment mới và tạo một <code>ReplicaSet</code>.</li>
+<li><b>ReplicaSet controller</b> thấy cần 3 Pod mà đang có 0 nên tạo 3 object <code>Pod</code> (chưa có node).</li>
+<li><b>Scheduler</b> thấy 3 Pod chưa có node, lọc và chấm điểm, ghi <code>nodeName</code> cho từng Pod.</li>
+<li><b>kubelet</b> trên mỗi node được chọn thấy Pod gán cho mình và gọi container runtime qua CRI.</li>
+<li>Runtime kéo image, tạo sandbox (pause container), CNI cấp IP, rồi chạy container.</li>
+<li>kubelet chạy probe và cập nhật <code>status</code> của Pod về API server. Khi readiness thành công, Pod được thêm vào EndpointSlice của Service.</li>
+<li><b>kube-proxy</b> trên các node cập nhật quy tắc để traffic của Service tới được Pod mới.</li>
+</ol>
+<div class="callout tip"><b>Mẹo nhớ</b><p>Không ai ra lệnh trực tiếp cho ai. Mỗi thành phần chỉ watch một loại object và làm phần việc của mình. Đó là lý do hệ thống tự hồi phục: xóa một Pod thì ReplicaSet controller lại thấy thiếu và tạo lại.</p></div>
+</article>
+
+<!-- ============ OBJECTS ============ -->
+<article class="page" data-id="objects" data-group="Đối tượng cốt lõi" data-title="API objects và YAML" hidden>
+<h1>API objects, YAML, label và namespace</h1>
+<p class="lead">Mọi thứ trong Kubernetes là một object có cấu trúc giống nhau.</p>
+
+<h2>Cấu trúc một manifest</h2>
+<pre><code>apiVersion: apps/v1        # nhóm API / phiên bản
+kind: Deployment           # loại object
+metadata:                  # định danh
+  name: web
+  namespace: demo
+  labels: {app: web}
+  annotations: {owner: "team-a"}
+spec:                      # trạng thái mong muốn (bạn viết)
+  replicas: 3
+  # ...
+status: {}                 # trạng thái thực tế (hệ thống ghi)</code></pre>
+<ul>
+<li><b>apiVersion:</b> core group là <code>v1</code> (Pod, Service, ConfigMap…), còn lại dạng <code>nhóm/phiên bản</code> như <code>apps/v1</code>, <code>batch/v1</code>, <code>networking.k8s.io/v1</code>, <code>rbac.authorization.k8s.io/v1</code>.</li>
+<li><b>metadata:</b> <code>name</code> (duy nhất trong namespace theo loại), <code>uid</code>, <code>labels</code>, <code>annotations</code>, <code>ownerReferences</code>, <code>finalizers</code>.</li>
+<li><b>spec / status:</b> bạn viết spec, controller cập nhật status.</li>
+</ul>
+<p>Tên object phải theo chuẩn DNS-1123: chữ thường, số, <code>-</code> và <code>.</code>.</p>
+
+<h2>Namespace</h2>
+<p>Phân vùng logic trong một cluster, dùng để tách môi trường, team, và gắn quota hay RBAC.</p>
+<div class="tw"><table>
+<tr><th>Namespace mặc định</th><th>Mục đích</th></tr>
+<tr><td><code>default</code></td><td>Nơi object được tạo khi không chỉ định.</td></tr>
+<tr><td><code>kube-system</code></td><td>Thành phần hệ thống (CoreDNS, kube-proxy…).</td></tr>
+<tr><td><code>kube-public</code></td><td>Dữ liệu đọc được công khai trong cluster.</td></tr>
+<tr><td><code>kube-node-lease</code></td><td>Lease heartbeat của node.</td></tr>
+</table></div>
+<p>Không phải mọi object đều thuộc namespace. Các object cấp cluster gồm Node, PersistentVolume, StorageClass, ClusterRole, Namespace. Namespace không cô lập mạng. Muốn chặn traffic phải dùng NetworkPolicy.</p>
+
+<h2>Label, selector và annotation</h2>
+<ul>
+<li><b>Label:</b> cặp key/value dùng để nhóm và chọn object (<code>app=web</code>, <code>env=prod</code>).</li>
+<li><b>Selector:</b> kiểu bằng (<code>app=web</code>) hoặc kiểu tập hợp (<code>env in (prod,staging)</code>).</li>
+<li><b>Annotation:</b> metadata không dùng để chọn, chứa thông tin tùy ý cho công cụ hoặc con người.</li>
+</ul>
+<pre><code>kubectl get pods -l app=web,env=prod
+kubectl get pods -l 'env in (prod,staging)'
+kubectl label pod web-1 tier=frontend</code></pre>
+
+<h2>Imperative và declarative</h2>
+<pre><code># imperative: ra lệnh trực tiếp
+kubectl create deployment web --image=nginx --replicas=3
+
+# declarative: mô tả bằng file (nên dùng)
+kubectl apply -f web.yaml
+
+# sinh YAML mẫu mà không tạo gì
+kubectl create deployment web --image=nginx --dry-run=client -o yaml &gt; web.yaml</code></pre>
+<p><code>apply</code> tạo hoặc cập nhật theo file, phù hợp với GitOps. <code>create</code> báo lỗi nếu đã tồn tại.</p>
+<div class="callout tip"><b>Mẹo</b><p><code>kubectl explain pod.spec.containers</code> hiển thị tài liệu các field ngay trong terminal. Thêm <code>--recursive</code> để xem toàn cây.</p></div>
+</article>
+
+<!-- ============ PODS ============ -->
+<article class="page" data-id="pods" data-group="Đối tượng cốt lõi" data-title="Pod" hidden>
+<h1>Pod</h1>
+<p class="lead">Pod là đơn vị nhỏ nhất bạn triển khai. Một Pod gồm một hoặc nhiều container chạy cùng nhau trên cùng một node.</p>
+
+<h2>Các container trong Pod chia sẻ gì?</h2>
+<ul>
+<li><b>Network namespace:</b> cùng một IP, giao tiếp với nhau qua <code>localhost</code>, không được trùng port.</li>
+<li><b>Volume:</b> có thể mount chung.</li>
+<li>Có thể chia sẻ process namespace nếu bật.</li>
+</ul>
+<p>Mỗi Pod có một container “pause” giữ network namespace để các container ứng dụng gắn vào.</p>
+
+<h2>Ví dụ đầy đủ</h2>
+<pre><code>apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  labels:
+    app: web
+spec:
+  containers:
+    - name: nginx
+      image: nginx:1.27
+      ports:
+        - containerPort: 80
+      resources:
+        requests: {cpu: 100m, memory: 128Mi}
+        limits:   {memory: 256Mi}
+      readinessProbe:
+        httpGet: {path: /, port: 80}
+        initialDelaySeconds: 3
+        periodSeconds: 5
+      livenessProbe:
+        httpGet: {path: /, port: 80}
+        periodSeconds: 10
+  restartPolicy: Always</code></pre>
+
+<h2>Vòng đời</h2>
+<div class="tw"><table>
+<tr><th>Phase</th><th>Ý nghĩa</th></tr>
+<tr><td>Pending</td><td>Đã được chấp nhận nhưng chưa chạy: chờ schedule hoặc đang kéo image.</td></tr>
+<tr><td>Running</td><td>Đã gán node, ít nhất một container đang chạy hoặc đang khởi động lại.</td></tr>
+<tr><td>Succeeded</td><td>Mọi container thoát với mã 0 và sẽ không khởi động lại (Job).</td></tr>
+<tr><td>Failed</td><td>Mọi container đã dừng và có ít nhất một cái thất bại.</td></tr>
+<tr><td>Unknown</td><td>Không lấy được trạng thái, thường do mất liên lạc với node.</td></tr>
+</table></div>
+<p>Trạng thái của từng container: <code>Waiting</code>, <code>Running</code>, <code>Terminated</code>. <code>restartPolicy</code> gồm <code>Always</code> (mặc định), <code>OnFailure</code>, <code>Never</code>.</p>
+
+<h2>Init container và sidecar</h2>
+<ul>
+<li><b>Init container</b> chạy tuần tự, xong hết mới tới container chính. Dùng để chờ dependency, tải config, chạy migration.</li>
+<li><b>Sidecar</b> chạy song song với container chính (log shipper, proxy). Bản K8s mới hỗ trợ sidecar chuẩn bằng init container có <code>restartPolicy: Always</code>, bảo đảm khởi động trước và tắt sau container chính.</li>
+</ul>
+<p>Các pattern đa container: <b>sidecar</b> (mở rộng chức năng), <b>ambassador</b> (proxy ra ngoài), <b>adapter</b> (chuẩn hóa đầu ra).</p>
+
+<h2>Probes</h2>
+<div class="tw"><table>
+<tr><th>Probe</th><th>Hỏi gì</th><th>Khi thất bại</th></tr>
+<tr><td>startupProbe</td><td>App đã khởi động xong chưa?</td><td>Kill và restart. Các probe khác tạm chờ.</td></tr>
+<tr><td>livenessProbe</td><td>App còn sống không?</td><td>kubelet restart container.</td></tr>
+<tr><td>readinessProbe</td><td>App sẵn sàng nhận traffic chưa?</td><td>Pod bị gỡ khỏi endpoints của Service, không restart.</td></tr>
+</table></div>
+<p>Cơ chế kiểm tra: <code>httpGet</code>, <code>tcpSocket</code>, <code>exec</code>, <code>grpc</code>.</p>
+<div class="callout warn"><b>Cẩn thận</b><p>Liveness probe quá gắt hoặc phụ thuộc vào service ngoài có thể làm cả đàn Pod restart liên tục. Dùng startupProbe cho app khởi động chậm.</p></div>
+
+<h2>Requests, limits và QoS</h2>
+<ul>
+<li><b>requests:</b> lượng tài nguyên scheduler dùng để chọn node và bảo đảm tối thiểu.</li>
+<li><b>limits:</b> trần sử dụng. Vượt CPU thì bị <i>throttle</i>, vượt memory thì bị <b>OOMKilled</b>.</li>
+<li>CPU tính theo core (<code>500m</code> = 0,5 core), memory theo byte (<code>Mi</code>, <code>Gi</code>).</li>
+</ul>
+<div class="tw"><table>
+<tr><th>QoS class</th><th>Điều kiện</th><th>Khi node thiếu tài nguyên</th></tr>
+<tr><td>Guaranteed</td><td>Mọi container có requests = limits (cả CPU và memory)</td><td>Bị evict sau cùng</td></tr>
+<tr><td>Burstable</td><td>Có requests hoặc limits nhưng không thỏa Guaranteed</td><td>Ở giữa</td></tr>
+<tr><td>BestEffort</td><td>Không khai báo gì</td><td>Bị evict đầu tiên</td></tr>
+</table></div>
+
+<h2>Tắt Pod êm (graceful termination)</h2>
+<ol>
+<li>Pod chuyển sang Terminating và bị gỡ khỏi endpoints.</li>
+<li>Chạy hook <code>preStop</code> (nếu có).</li>
+<li>Gửi <code>SIGTERM</code> cho tiến trình chính.</li>
+<li>Chờ tối đa <code>terminationGracePeriodSeconds</code> (mặc định 30 giây), hết hạn thì gửi <code>SIGKILL</code>.</li>
+</ol>
+<p>Ứng dụng nên bắt SIGTERM để đóng kết nối và hoàn tất request đang xử lý.</p>
+<div class="callout"><b>Ghi chú</b><p>Hiếm khi tạo Pod trần. Dùng Deployment, StatefulSet, Job để có tự phục hồi và rollout.</p></div>
+</article>
+
+<!-- ============ WORKLOADS ============ -->
+<article class="page" data-id="workloads" data-group="Đối tượng cốt lõi" data-title="Workload controllers" hidden>
+<h1>Workload controllers</h1>
+<p class="lead">Chọn đúng loại workload theo tính chất ứng dụng.</p>
+
+<div class="tw"><table>
+<tr><th>Loại</th><th>Dùng cho</th><th>Đặc điểm</th></tr>
+<tr><td>Deployment</td><td>App stateless (web, API)</td><td>Rolling update, rollback, scale</td></tr>
+<tr><td>StatefulSet</td><td>App có state (database, queue)</td><td>Tên ổn định, thứ tự, volume riêng mỗi Pod</td></tr>
+<tr><td>DaemonSet</td><td>Agent trên mọi (hoặc một số) node</td><td>Mỗi node một Pod</td></tr>
+<tr><td>Job</td><td>Tác vụ chạy tới khi xong</td><td>Hoàn thành, retry</td></tr>
+<tr><td>CronJob</td><td>Tác vụ theo lịch</td><td>Tạo Job theo cron</td></tr>
+</table></div>
+
+<h2>ReplicaSet</h2>
+<p>Giữ đúng số bản sao Pod theo selector. Bạn hiếm khi dùng trực tiếp vì Deployment quản lý nó giúp bạn.</p>
+
+<h2>Deployment</h2>
+<pre><code>apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: web}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 25%, maxUnavailable: 25%}
+  template:
+    metadata:
+      labels: {app: web}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          ports: [{containerPort: 80}]</code></pre>
+<ul>
+<li><code>selector</code> phải khớp label trong <code>template</code> và là bất biến sau khi tạo.</li>
+<li>Mỗi lần sửa <code>spec.template</code>, Deployment tạo ReplicaSet mới và chuyển Pod dần từ cũ sang mới.</li>
+<li><b>maxSurge:</b> số Pod được vượt quá replicas khi update. <b>maxUnavailable:</b> số Pod được phép thiếu.</li>
+<li>Chiến lược <code>Recreate</code> tắt hết Pod cũ rồi mới tạo Pod mới (có downtime).</li>
+</ul>
+<pre><code>kubectl set image deployment/web nginx=nginx:1.28
+kubectl rollout status deployment/web
+kubectl rollout history deployment/web
+kubectl rollout undo deployment/web            # quay về bản trước
+kubectl rollout undo deployment/web --to-revision=2
+kubectl scale deployment/web --replicas=5
+kubectl rollout restart deployment/web</code></pre>
+
+<h2>StatefulSet</h2>
+<ul>
+<li>Pod có tên cố định theo thứ tự: <code>db-0</code>, <code>db-1</code>, <code>db-2</code>.</li>
+<li>Tạo theo thứ tự 0, 1, 2 và xóa ngược lại (mặc định).</li>
+<li>Cần một <b>headless Service</b> (<code>clusterIP: None</code>) để mỗi Pod có DNS riêng: <code>db-0.db.ns.svc.cluster.local</code>.</li>
+<li><code>volumeClaimTemplates</code> tạo một PVC riêng cho mỗi Pod. PVC được giữ lại khi Pod bị thay thế.</li>
+</ul>
+
+<h2>DaemonSet</h2>
+<p>Đảm bảo mỗi node (hoặc node khớp selector) chạy một Pod. Dùng cho log collector, monitoring agent, CNI, kube-proxy. Node mới vào cluster tự có Pod.</p>
+
+<h2>Job và CronJob</h2>
+<pre><code>apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup
+spec:
+  schedule: "0 2 * * *"            # 02:00 mỗi ngày
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: busybox:1.36
+              command: ["sh", "-c", "echo backup"]</code></pre>
+<ul>
+<li>Job: <code>completions</code> (số lần phải thành công), <code>parallelism</code> (số Pod chạy song song), <code>backoffLimit</code> (số lần thử lại).</li>
+<li>Pod của Job phải có <code>restartPolicy</code> là <code>OnFailure</code> hoặc <code>Never</code>.</li>
+<li>CronJob: <code>concurrencyPolicy</code> là <code>Allow</code>, <code>Forbid</code> hoặc <code>Replace</code>.</li>
+</ul>
+</article>
+
+<!-- ============ SERVICES ============ -->
+<article class="page" data-id="services" data-group="Mạng" data-title="Service và DNS" hidden>
+<h1>Service và DNS</h1>
+<p class="lead">Pod đến rồi đi, IP đổi liên tục. Service cho một nhóm Pod một địa chỉ và tên DNS ổn định kèm cân bằng tải.</p>
+
+<h2>Mô hình mạng của Kubernetes</h2>
+<ul>
+<li>Mỗi Pod có IP riêng.</li>
+<li>Mọi Pod nói chuyện được với mọi Pod khác không qua NAT, dù ở node nào.</li>
+<li>Node nói chuyện được với Pod trên chính nó.</li>
+</ul>
+<p>Phần hiện thực do CNI plugin đảm nhiệm.</p>
+
+<h2>Manifest</h2>
+<pre><code>apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  type: ClusterIP
+  selector:
+    app: web            # chọn Pod theo label
+  ports:
+    - port: 80          # cổng của Service
+      targetPort: 8080  # cổng container (số hoặc tên)</code></pre>
+<p>Controller tạo <b>EndpointSlice</b> chứa IP các Pod khớp selector và đang Ready. Pod không Ready sẽ không nhận traffic.</p>
+
+<h2>Các loại Service</h2>
+<div class="tw"><table>
+<tr><th>Type</th><th>Cách hoạt động</th></tr>
+<tr><td>ClusterIP (mặc định)</td><td>IP ảo chỉ truy cập được trong cluster.</td></tr>
+<tr><td>NodePort</td><td>Mở thêm một cổng (30000–32767) trên mọi node, chuyển tới Service. Bao gồm ClusterIP.</td></tr>
+<tr><td>LoadBalancer</td><td>Yêu cầu cloud tạo load balancer ngoài, trỏ vào NodePort. Bao gồm NodePort.</td></tr>
+<tr><td>ExternalName</td><td>Trả về bản ghi CNAME tới một tên DNS ngoài, không proxy.</td></tr>
+<tr><td>Headless (<code>clusterIP: None</code>)</td><td>Không có IP ảo. DNS trả thẳng IP của các Pod. Dùng cho StatefulSet.</td></tr>
+</table></div>
+
+<h2>DNS</h2>
+<p>CoreDNS tạo bản ghi cho Service:</p>
+<pre><code>web                              # cùng namespace
+web.demo                         # từ namespace khác
+web.demo.svc.cluster.local       # tên đầy đủ (FQDN)</code></pre>
+<p>Pod của StatefulSet qua headless Service có tên dạng <code>pod-0.svc.ns.svc.cluster.local</code>.</p>
+
+<h2>Chi tiết cần nhớ</h2>
+<ul>
+<li><b>Tìm Service:</b> qua DNS (khuyến nghị) hoặc biến môi trường <code>WEB_SERVICE_HOST</code> (chỉ có nếu Service tạo trước Pod).</li>
+<li><b>sessionAffinity: ClientIP</b> giữ một client dính vào cùng một Pod.</li>
+<li><b>externalTrafficPolicy: Local</b> giữ nguyên IP nguồn và bỏ một hop, nhưng chỉ gửi tới Pod trên node nhận traffic.</li>
+<li>kube-proxy tạo quy tắc iptables hoặc IPVS để DNAT từ ClusterIP sang IP một Pod được chọn.</li>
+</ul>
+<pre><code>kubectl get svc,endpointslices
+kubectl run tmp --rm -it --image=busybox:1.36 -- nslookup web
+kubectl port-forward svc/web 8080:80</code></pre>
+</article>
+
+<!-- ============ INGRESS ============ -->
+<article class="page" data-id="ingress" data-group="Mạng" data-title="Ingress, Gateway, NetworkPolicy" hidden>
+<h1>Ingress, Gateway API và NetworkPolicy</h1>
+<p class="lead">Đưa traffic HTTP(S) từ ngoài vào cluster và kiểm soát traffic giữa các Pod.</p>
+
+<h2>Ingress</h2>
+<p><b>Ingress</b> là object khai báo luật định tuyến HTTP/HTTPS (host, path) tới các Service. Bản thân nó không làm gì. Bạn cần một <b>Ingress controller</b> (NGINX, Traefik, HAProxy…) đọc Ingress và thực thi.</p>
+<pre><code>apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [app.example.com]
+      secretName: app-tls
+  rules:
+    - host: app.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service: {name: api, port: {number: 80}}
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: web, port: {number: 80}}</code></pre>
+<ul>
+<li><b>pathType:</b> <code>Exact</code>, <code>Prefix</code>, <code>ImplementationSpecific</code>.</li>
+<li><b>IngressClass</b> chọn controller nào xử lý Ingress.</li>
+<li>TLS lấy chứng chỉ từ Secret loại <code>kubernetes.io/tls</code>. Thường kết hợp cert-manager để cấp tự động.</li>
+</ul>
+
+<h2>Gateway API</h2>
+<p>Thế hệ tiếp theo của Ingress, biểu đạt tốt hơn và tách vai trò rõ ràng:</p>
+<ul>
+<li><b>GatewayClass:</b> loại hạ tầng (do nhà cung cấp quản lý).</li>
+<li><b>Gateway:</b> điểm vào, listener, cổng (do team hạ tầng quản lý).</li>
+<li><b>HTTPRoute</b> (và GRPCRoute, TCPRoute…): luật định tuyến (do team ứng dụng quản lý).</li>
+</ul>
+<div class="callout"><b>Ghi chú</b><p>Gateway API là hướng phát triển chính cho traffic vào cluster. Kiểm tra tình trạng hỗ trợ của controller bạn đang dùng trước khi chọn.</p></div>
+
+<h2>NetworkPolicy</h2>
+<p>Mặc định mọi Pod nói chuyện được với mọi Pod. NetworkPolicy là “tường lửa” L3/L4 cho Pod:</p>
+<ul>
+<li>Chỉ có hiệu lực nếu CNI hỗ trợ (Calico, Cilium… có, Flannel thuần thì không).</li>
+<li>Khi một Pod được chọn bởi ít nhất một policy theo chiều nào đó (Ingress hoặc Egress), mọi traffic chiều đó bị chặn trừ những gì được cho phép.</li>
+<li>Các policy cộng dồn (union), không có luật deny.</li>
+</ul>
+<pre><code># Chặn toàn bộ traffic vào namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Chỉ cho frontend gọi vào api cổng 8080
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend
+spec:
+  podSelector:
+    matchLabels: {app: api}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: frontend}
+      ports:
+        - port: 8080</code></pre>
+</article>
+
+<!-- ============ CONFIG ============ -->
+<article class="page" data-id="config" data-group="Cấu hình và lưu trữ" data-title="ConfigMap và Secret" hidden>
+<h1>ConfigMap và Secret</h1>
+<p class="lead">Tách cấu hình ra khỏi image để cùng một image chạy được ở nhiều môi trường.</p>
+
+<h2>ConfigMap</h2>
+<p>Lưu dữ liệu cấu hình không nhạy cảm dạng key/value (tối đa 1 MiB).</p>
+<pre><code>apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  LOG_LEVEL: info
+  app.properties: |
+    mode=prod
+    retries=3</code></pre>
+<p>Ba cách dùng trong Pod:</p>
+<pre><code>containers:
+  - name: app
+    image: myapp:1.0
+    env:
+      - name: LOG_LEVEL
+        valueFrom:
+          configMapKeyRef: {name: app-config, key: LOG_LEVEL}
+    envFrom:
+      - configMapRef: {name: app-config}      # nạp mọi key thành env
+    volumeMounts:
+      - name: cfg
+        mountPath: /etc/app
+volumes:
+  - name: cfg
+    configMap: {name: app-config}              # mỗi key thành một file</code></pre>
+<ul>
+<li>Mount dạng volume sẽ tự cập nhật sau một khoảng trễ (tối đa vài chục giây). Mount bằng <code>subPath</code> thì không cập nhật.</li>
+<li>Biến môi trường chỉ được nạp lúc container khởi động. Muốn đổi phải restart Pod.</li>
+<li>Đặt <code>immutable: true</code> để chống sửa nhầm và giảm tải cho API server.</li>
+</ul>
+
+<h2>Secret</h2>
+<p>Giống ConfigMap nhưng dành cho dữ liệu nhạy cảm (mật khẩu, token, khóa TLS). Giá trị trong <code>data</code> được mã hóa base64.</p>
+<div class="tw"><table>
+<tr><th>Type</th><th>Dùng cho</th></tr>
+<tr><td><code>Opaque</code></td><td>Dữ liệu tùy ý (mặc định)</td></tr>
+<tr><td><code>kubernetes.io/tls</code></td><td>Chứng chỉ và khóa (<code>tls.crt</code>, <code>tls.key</code>)</td></tr>
+<tr><td><code>kubernetes.io/dockerconfigjson</code></td><td>Đăng nhập registry riêng (<code>imagePullSecrets</code>)</td></tr>
+<tr><td><code>kubernetes.io/basic-auth</code>, <code>ssh-auth</code></td><td>Thông tin xác thực</td></tr>
+</table></div>
+<pre><code>kubectl create secret generic db --from-literal=password='S3cret!'
+kubectl create secret docker-registry regcred \
+  --docker-server=registry.example.com --docker-username=me --docker-password=pw</code></pre>
+<div class="callout warn"><b>Cẩn thận</b>
+<p>Base64 không phải mã hóa. Để an toàn hơn:</p>
+<ul><li>Bật encryption at rest cho etcd (hoặc dùng KMS provider).</li><li>Giới hạn RBAC đọc Secret chặt chẽ.</li><li>Ưu tiên mount dạng volume thay vì env để tránh lộ qua log hoặc dump môi trường.</li><li>Cân nhắc External Secrets Operator hoặc Secrets Store CSI Driver với Vault, AWS Secrets Manager…</li></ul></div>
+</article>
+
+<!-- ============ STORAGE ============ -->
+<article class="page" data-id="storage" data-group="Cấu hình và lưu trữ" data-title="Volume, PV và PVC" hidden>
+<h1>Volume, PersistentVolume và PersistentVolumeClaim</h1>
+<p class="lead">Hệ thống file trong container mất khi container restart. Volume giúp dữ liệu sống lâu hơn container, và PV/PVC giúp dữ liệu sống lâu hơn Pod.</p>
+
+<h2>Các loại volume thường gặp</h2>
+<div class="tw"><table>
+<tr><th>Loại</th><th>Vòng đời</th><th>Dùng cho</th></tr>
+<tr><td><code>emptyDir</code></td><td>Theo Pod (xóa khi Pod bị xóa)</td><td>Thư mục tạm, chia sẻ file giữa các container</td></tr>
+<tr><td><code>hostPath</code></td><td>Theo node</td><td>Truy cập file trên node (rủi ro bảo mật, hạn chế dùng)</td></tr>
+<tr><td><code>configMap</code> / <code>secret</code> / <code>projected</code></td><td>Theo Pod</td><td>Đưa cấu hình vào dạng file</td></tr>
+<tr><td><code>persistentVolumeClaim</code></td><td>Độc lập với Pod</td><td>Dữ liệu bền vững</td></tr>
+</table></div>
+
+<h2>PV, PVC và StorageClass</h2>
+<ul>
+<li><b>PersistentVolume (PV):</b> một phần storage trong cluster (cấp cluster, không thuộc namespace).</li>
+<li><b>PersistentVolumeClaim (PVC):</b> yêu cầu storage của người dùng (thuộc namespace): dung lượng, access mode, class.</li>
+<li><b>StorageClass:</b> mô tả “loại” storage và cách cấp phát động (provisioner, tham số).</li>
+</ul>
+<pre><code>apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 10Gi
+---
+# dùng trong Pod
+spec:
+  containers:
+    - name: app
+      image: myapp:1.0
+      volumeMounts:
+        - {name: data, mountPath: /var/lib/app}
+  volumes:
+    - name: data
+      persistentVolumeClaim: {claimName: data}</code></pre>
+
+<h2>Luồng cấp phát</h2>
+<ol>
+<li>User tạo PVC.</li>
+<li><b>Dynamic provisioning:</b> StorageClass tạo PV mới qua CSI driver. (<b>Static:</b> admin tạo sẵn PV, PVC tìm PV khớp.)</li>
+<li>PVC được <i>bound</i> với PV (quan hệ 1-1).</li>
+<li>Pod mount PVC. Khi xóa PVC, số phận dữ liệu tùy <code>reclaimPolicy</code>.</li>
+</ol>
+
+<h2>Access modes</h2>
+<div class="tw"><table>
+<tr><th>Mode</th><th>Ý nghĩa</th></tr>
+<tr><td>ReadWriteOnce (RWO)</td><td>Đọc ghi bởi một node</td></tr>
+<tr><td>ReadOnlyMany (ROX)</td><td>Đọc bởi nhiều node</td></tr>
+<tr><td>ReadWriteMany (RWX)</td><td>Đọc ghi bởi nhiều node (NFS, CephFS, EFS…)</td></tr>
+<tr><td>ReadWriteOncePod (RWOP)</td><td>Đọc ghi bởi đúng một Pod</td></tr>
+</table></div>
+
+<h2>Reclaim policy và các tùy chọn</h2>
+<ul>
+<li><b>Delete:</b> xóa PV và storage thật khi PVC bị xóa (mặc định cho dynamic).</li>
+<li><b>Retain:</b> giữ lại dữ liệu, admin xử lý thủ công.</li>
+<li><code>allowVolumeExpansion: true</code> trên StorageClass cho phép tăng dung lượng PVC.</li>
+<li><code>volumeBindingMode: WaitForFirstConsumer</code> trì hoãn tạo volume tới khi Pod được schedule, tránh volume nằm khác zone với Pod.</li>
+<li><b>CSI</b> (Container Storage Interface) là chuẩn để hãng storage viết driver. VolumeSnapshot hỗ trợ chụp snapshot.</li>
+</ul>
+</article>
+
+<!-- ============ SCHEDULING ============ -->
+<article class="page" data-id="scheduling" data-group="Vận hành" data-title="Scheduling" hidden>
+<h1>Điều khiển việc xếp Pod lên Node</h1>
+<p class="lead">Scheduler có logic mặc định tốt. Bạn can thiệp khi cần chỉ định hoặc tránh node cụ thể.</p>
+
+<h2>nodeSelector và node affinity</h2>
+<pre><code>spec:
+  nodeSelector:
+    disktype: ssd
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - {key: topology.kubernetes.io/zone, operator: In, values: [a, b]}
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 50
+          preference:
+            matchExpressions:
+              - {key: disktype, operator: In, values: [ssd]}</code></pre>
+<ul>
+<li><b>required…:</b> bắt buộc (hard). <b>preferred…:</b> ưu tiên (soft).</li>
+<li><code>IgnoredDuringExecution</code>: nếu label node đổi sau khi Pod đã chạy, Pod không bị đuổi.</li>
+</ul>
+
+<h2>Pod affinity và anti-affinity</h2>
+<p>Quyết định dựa trên các Pod khác đang chạy ở đó. <code>topologyKey</code> xác định “miền” (<code>kubernetes.io/hostname</code> là node, <code>topology.kubernetes.io/zone</code> là zone).</p>
+<pre><code>affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels: {app: web}
+        topologyKey: kubernetes.io/hostname      # mỗi node tối đa một Pod web</code></pre>
+
+<h2>Taints và tolerations</h2>
+<p><b>Taint</b> gắn lên node để đẩy Pod ra. <b>Toleration</b> gắn lên Pod để cho phép chịu taint đó.</p>
+<div class="tw"><table>
+<tr><th>Effect</th><th>Ý nghĩa</th></tr>
+<tr><td>NoSchedule</td><td>Không xếp Pod mới lên node (trừ Pod có toleration)</td></tr>
+<tr><td>PreferNoSchedule</td><td>Cố gắng tránh, không bắt buộc</td></tr>
+<tr><td>NoExecute</td><td>Không xếp mới và đuổi các Pod đang chạy không có toleration</td></tr>
+</table></div>
+<pre><code>kubectl taint nodes node1 dedicated=gpu:NoSchedule
+kubectl taint nodes node1 dedicated=gpu:NoSchedule-     # gỡ taint
+
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: gpu
+    effect: NoSchedule</code></pre>
+<div class="callout"><b>Ghi nhớ</b><p>Taint/toleration chỉ <i>cho phép</i> Pod lên node. Để <i>bắt</i> Pod lên đúng node đó, kết hợp thêm nodeSelector hoặc node affinity.</p></div>
+
+<h2>Topology spread constraints</h2>
+<pre><code>topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels: {app: web}</code></pre>
+<p>Rải đều Pod giữa các zone hoặc node. <code>maxSkew</code> là độ lệch tối đa cho phép.</p>
+
+<h2>Ưu tiên và bảo trì node</h2>
+<ul>
+<li><b>PriorityClass:</b> Pod ưu tiên cao có thể <i>preempt</i> (đuổi) Pod ưu tiên thấp khi cluster hết chỗ.</li>
+<li><b>cordon</b> đánh dấu node không nhận Pod mới. <b>drain</b> cordon rồi di tản Pod. <b>uncordon</b> mở lại.</li>
+<li><b>PodDisruptionBudget (PDB):</b> giới hạn số Pod được phép down cùng lúc khi bị di tản chủ động.</li>
+<li><b>ResourceQuota</b> giới hạn tổng tài nguyên của namespace. <b>LimitRange</b> đặt mặc định và biên min/max cho từng Pod/container.</li>
+</ul>
+<pre><code>kubectl cordon node1
+kubectl drain node1 --ignore-daemonsets --delete-emptydir-data
+kubectl uncordon node1</code></pre>
+</article>
+
+<!-- ============ AUTOSCALING ============ -->
+<article class="page" data-id="autoscaling" data-group="Vận hành" data-title="Autoscaling" hidden>
+<h1>Autoscaling</h1>
+<p class="lead">Ba tầng tự co giãn: số Pod, kích thước Pod và số Node.</p>
+
+<h2>Horizontal Pod Autoscaler (HPA)</h2>
+<p>Tăng giảm số replica của Deployment/StatefulSet theo metric (CPU, memory, metric tùy chỉnh). Cần <code>metrics-server</code> và Pod phải khai báo <code>requests</code> (HPA tính % theo request).</p>
+<pre><code>apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}</code></pre>
+<p>Công thức: <code>desiredReplicas = ceil[ currentReplicas × currentMetric / targetMetric ]</code>. Ví dụ 4 replicas đang dùng 90% CPU, mục tiêu 60% thì cần ceil(4 × 90 / 60) = 6.</p>
+<pre><code>kubectl autoscale deployment web --min=2 --max=10 --cpu-percent=70
+kubectl get hpa -w</code></pre>
+
+<h2>Vertical Pod Autoscaler (VPA)</h2>
+<p>Đề xuất hoặc tự điều chỉnh <code>requests/limits</code> của Pod theo mức dùng thực tế. Là add-on riêng. Thay đổi resource thường cần restart Pod. Không nên để VPA và HPA cùng điều khiển một metric CPU/memory.</p>
+
+<h2>Cluster Autoscaler / Karpenter</h2>
+<ul>
+<li>Thêm node khi có Pod <code>Pending</code> do thiếu tài nguyên.</li>
+<li>Bớt node khi node dư và Pod trên đó di chuyển được.</li>
+<li>Thường tích hợp với node group của cloud.</li>
+</ul>
+<div class="callout tip"><b>Mẹo</b><p>KEDA mở rộng HPA để scale theo sự kiện (độ dài queue, lag Kafka…) và có thể scale về 0.</p></div>
+</article>
+
+<!-- ============ SECURITY ============ -->
+<article class="page" data-id="security" data-group="Vận hành" data-title="RBAC và bảo mật" hidden>
+<h1>RBAC và bảo mật</h1>
+<p class="lead">Bảo mật nhiều lớp: ai được vào, được làm gì, Pod được phép chạy thế nào, và traffic nào được đi.</p>
+
+<h2>Xác thực và phân quyền</h2>
+<ul>
+<li><b>Authentication:</b> client certificate, bearer token, OIDC, ServiceAccount token. Kubernetes không có object “User”, danh tính đến từ nguồn bên ngoài.</li>
+<li><b>Authorization:</b> RBAC là chuẩn. Chỉ có luật cho phép (allow), không có deny.</li>
+</ul>
+
+<h2>RBAC</h2>
+<div class="tw"><table>
+<tr><th>Object</th><th>Phạm vi</th><th>Vai trò</th></tr>
+<tr><td>Role</td><td>Một namespace</td><td>Tập quyền (verbs trên resources)</td></tr>
+<tr><td>ClusterRole</td><td>Toàn cluster</td><td>Tập quyền, gồm cả resource cấp cluster hoặc dùng chung cho nhiều namespace</td></tr>
+<tr><td>RoleBinding</td><td>Một namespace</td><td>Gán Role/ClusterRole cho subject trong namespace đó</td></tr>
+<tr><td>ClusterRoleBinding</td><td>Toàn cluster</td><td>Gán ClusterRole cho subject trên toàn cluster</td></tr>
+</table></div>
+<pre><code>apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: dev
+  name: pod-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: dev
+  name: read-pods
+subjects:
+  - kind: ServiceAccount
+    name: app-sa
+    namespace: dev
+roleRef:
+  kind: Role
+  name: pod-reader
+  apiGroup: rbac.authorization.k8s.io</code></pre>
+<pre><code>kubectl auth can-i delete pods -n dev
+kubectl auth can-i list secrets --as=system:serviceaccount:dev:app-sa -n dev</code></pre>
+<div class="callout warn"><b>Cẩn thận</b><p>Tránh gán <code>cluster-admin</code> bừa bãi. Áp dụng nguyên tắc least privilege: quyền tối thiểu cần thiết, ưu tiên Role theo namespace.</p></div>
+
+<h2>ServiceAccount</h2>
+<p>Danh tính cho tiến trình trong Pod khi gọi API server. Mỗi namespace có ServiceAccount <code>default</code>. Token được cấp dạng ngắn hạn, gắn với Pod (bound token). Nếu app không cần gọi API, đặt <code>automountServiceAccountToken: false</code>.</p>
+
+<h2>Admission và Pod Security</h2>
+<ul>
+<li><b>Admission controller:</b> chặn hoặc sửa request sau khi xác thực/phân quyền. Mở rộng bằng webhook, ValidatingAdmissionPolicy, hoặc công cụ như OPA Gatekeeper, Kyverno.</li>
+<li><b>Pod Security Admission</b> thay thế PodSecurityPolicy (đã gỡ ở 1.25). Ba mức: <code>privileged</code>, <code>baseline</code>, <code>restricted</code>. Ba chế độ: <code>enforce</code>, <code>audit</code>, <code>warn</code>.</li>
+</ul>
+<pre><code>kubectl label ns dev pod-security.kubernetes.io/enforce=restricted</code></pre>
+
+<h2>securityContext</h2>
+<pre><code>spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: app
+      image: myapp:1.0
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: ["ALL"]}</code></pre>
+
+<h2>Checklist nhanh</h2>
+<ul>
+<li>Chạy container không phải root, bỏ capability thừa, root filesystem chỉ đọc.</li>
+<li>Dùng NetworkPolicy theo hướng mặc định chặn.</li>
+<li>Quét image, dùng tag cố định hoặc digest, registry tin cậy.</li>
+<li>Mã hóa Secret at rest, bật audit logging, cập nhật Kubernetes thường xuyên.</li>
+<li>Không để API server lộ ra Internet công khai.</li>
+</ul>
+</article>
+
+<!-- ============ KUBECTL ============ -->
+<article class="page" data-id="kubectl" data-group="Vận hành" data-title="kubectl cheatsheet" hidden>
+<h1>kubectl cheatsheet</h1>
+<p class="lead">Các lệnh dùng hằng ngày, nhóm theo mục đích.</p>
+
+<h2>Cấu hình và context</h2>
+<pre><code>kubectl config get-contexts
+kubectl config use-context kind-lab
+kubectl config set-context --current --namespace=demo
+kubectl cluster-info
+kubectl api-resources              # liệt kê các loại resource
+kubectl explain deployment.spec</code></pre>
+
+<h2>Xem tài nguyên</h2>
+<pre><code>kubectl get pods                       # ns hiện tại
+kubectl get pods -A                    # mọi namespace
+kubectl get pods -o wide               # thêm IP, node
+kubectl get pod web -o yaml
+kubectl get all -n demo
+kubectl get pods -l app=web --show-labels
+kubectl get pods --field-selector status.phase=Running
+kubectl get pods -o jsonpath='{.items[*].metadata.name}'
+kubectl get pods -w                    # theo dõi liên tục
+kubectl describe pod web               # sự kiện và chi tiết
+kubectl get events --sort-by=.lastTimestamp</code></pre>
+
+<h2>Tạo, sửa, xóa</h2>
+<pre><code>kubectl apply -f app.yaml
+kubectl apply -f ./manifests/ -R
+kubectl diff -f app.yaml               # xem thay đổi trước khi apply
+kubectl edit deployment web
+kubectl patch deployment web -p '{"spec":{"replicas":4}}'
+kubectl delete -f app.yaml
+kubectl delete pod web --grace-period=0 --force   # chỉ khi bị kẹt
+kubectl label pod web tier=frontend
+kubectl annotate pod web note="demo"</code></pre>
+
+<h2>Debug</h2>
+<pre><code>kubectl logs web                       # log
+kubectl logs web -c sidecar            # chọn container
+kubectl logs web --previous            # log lần chạy trước (CrashLoop)
+kubectl logs -l app=web -f --tail=100
+kubectl exec -it web -- sh
+kubectl port-forward pod/web 8080:80
+kubectl cp web:/var/log/app.log ./app.log
+kubectl debug -it web --image=busybox:1.36 --target=nginx
+kubectl top pods                       # cần metrics-server
+kubectl top nodes</code></pre>
+
+<h2>Rollout và scale</h2>
+<pre><code>kubectl rollout status deploy/web
+kubectl rollout undo deploy/web
+kubectl scale deploy/web --replicas=5
+kubectl set image deploy/web nginx=nginx:1.28
+kubectl set resources deploy/web --limits=memory=256Mi</code></pre>
+
+<h2>Mẹo năng suất</h2>
+<pre><code>alias k=kubectl
+source &lt;(kubectl completion bash)
+complete -o default -F __start_kubectl k
+export do="--dry-run=client -o yaml"
+k run nginx --image=nginx $do &gt; pod.yaml</code></pre>
+<p>Cờ <code>-o</code> hay dùng: <code>wide</code>, <code>yaml</code>, <code>json</code>, <code>name</code>, <code>jsonpath=...</code>, <code>custom-columns=...</code>.</p>
+</article>
+
+<!-- ============ TROUBLESHOOTING ============ -->
+<article class="page" data-id="troubleshooting" data-group="Vận hành" data-title="Troubleshooting" hidden>
+<h1>Troubleshooting</h1>
+<p class="lead">Quy trình chung: nhìn trạng thái, đọc sự kiện, đọc log, rồi mới đoán nguyên nhân.</p>
+
+<h2>Bốn lệnh đầu tiên</h2>
+<pre><code>kubectl get pod POD -o wide            # trạng thái, node
+kubectl describe pod POD               # xem mục Events ở cuối
+kubectl logs POD [--previous]          # log ứng dụng
+kubectl get events --sort-by=.lastTimestamp</code></pre>
+
+<h2>Trạng thái Pod hay gặp</h2>
+<div class="tw"><table>
+<tr><th>Trạng thái</th><th>Nguyên nhân thường gặp</th><th>Cách kiểm tra</th></tr>
+<tr><td>Pending</td><td>Không đủ CPU/RAM, không khớp nodeSelector/affinity, taint, PVC chưa bound, hết quota</td><td><code>describe pod</code>: dòng <i>FailedScheduling</i></td></tr>
+<tr><td>ContainerCreating (kẹt)</td><td>Kéo image chậm, lỗi mount volume, lỗi CNI</td><td><code>describe pod</code>, kiểm tra CNI và storage</td></tr>
+<tr><td>ErrImagePull / ImagePullBackOff</td><td>Sai tên hoặc tag image, registry riêng thiếu <code>imagePullSecrets</code>, hết rate limit</td><td>Xem tên image trong Events</td></tr>
+<tr><td>CrashLoopBackOff</td><td>App thoát liền: lỗi code, thiếu env hoặc config, probe quá gắt</td><td><code>logs --previous</code>, exit code trong <code>describe</code></td></tr>
+<tr><td>OOMKilled (exit 137)</td><td>Vượt memory limit</td><td>Tăng limit hoặc sửa leak; xem <code>Last State</code></td></tr>
+<tr><td>CreateContainerConfigError</td><td>ConfigMap hoặc Secret được tham chiếu không tồn tại</td><td><code>describe pod</code></td></tr>
+<tr><td>Evicted</td><td>Node thiếu tài nguyên (disk, memory)</td><td><code>describe node</code>, xem Conditions</td></tr>
+<tr><td>Terminating (kẹt)</td><td>Finalizer chưa xong, node mất liên lạc</td><td><code>get pod -o yaml</code>: <code>finalizers</code></td></tr>
+<tr><td>Running nhưng không Ready</td><td>Readiness probe thất bại</td><td><code>describe pod</code>, kiểm tra endpoint probe</td></tr>
+</table></div>
+
+<h2>Service không truy cập được</h2>
+<ol>
+<li>Pod có chạy và Ready không? <code>kubectl get pods -l app=web</code></li>
+<li>Selector của Service có khớp label Pod không? <code>kubectl get endpointslices</code>. Rỗng nghĩa là không khớp hoặc không Ready.</li>
+<li><code>targetPort</code> có đúng cổng container đang lắng nghe không?</li>
+<li>Gọi thử từ trong cluster: <code>kubectl run tmp --rm -it --image=busybox:1.36 -- wget -qO- web</code></li>
+<li>DNS ổn không? <code>nslookup web</code>. Kiểm tra CoreDNS ở <code>kube-system</code>.</li>
+<li>Có NetworkPolicy nào chặn không?</li>
+<li>Với Ingress: controller có chạy không, <code>ingressClassName</code> đúng chưa, host và path khớp chưa?</li>
+</ol>
+
+<h2>Node NotReady</h2>
+<pre><code>kubectl describe node NODE             # xem Conditions: MemoryPressure, DiskPressure...
+# trên node:
+systemctl status kubelet
+journalctl -u kubelet -f
+crictl ps</code></pre>
+<p>Nguyên nhân hay gặp: kubelet dừng, hết disk, container runtime lỗi, CNI chưa cài, mất kết nối mạng tới API server.</p>
+
+<h2>Ý tưởng debug thêm</h2>
+<ul>
+<li><code>kubectl debug</code> gắn ephemeral container để chẩn đoán Pod đang chạy mà image không có shell.</li>
+<li><code>kubectl get pod POD -o yaml</code> xem <code>status</code> đầy đủ.</li>
+<li>Giữ Pod sống để vào xem: tạm đổi command thành <code>sleep infinity</code>.</li>
+</ul>
+</article>
+
+    <footer>
+      <p style="margin:0 0 8px"><b style="color:var(--ink)">Soạn bởi TracViet</b> (<a href="https://github.com/TracVietHustCS" target="_blank" rel="noopener">@TracVietHustCS</a>) · <a href="https://github.com/TracVietHustCS/k8s-study-notes" target="_blank" rel="noopener">Mã nguồn trên GitHub</a></p>
+      Ghi chú cá nhân để tự học, có thể thiếu hoặc lỗi thời. Tham khảo bản chính thức tại <a href="https://kubernetes.io/docs/">kubernetes.io/docs</a>.
+      Kubernetes là nhãn hiệu của The Linux Foundation. Trang này không liên kết chính thức với dự án.
+    </footer>
+  </main>
+
+  <nav id="toc" aria-label="Trong trang này"></nav>
+</div>
+
+<script>
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const pages=$$('.page');
+const index=pages.map(p=>p.textContent.toLowerCase());
+let read={};
+try{read=JSON.parse(localStorage.getItem('k8s-read')||'{}')}catch(e){}
+const saveRead=()=>{try{localStorage.setItem('k8s-read',JSON.stringify(read))}catch(e){}};
+
+/* sidebar */
+const groups=[];
+pages.forEach(p=>{
+  let g=groups.find(x=>x.name===p.dataset.group);
+  if(!g){g={name:p.dataset.group,items:[]};groups.push(g)}
+  g.items.push(p);
+});
+let current='overview';
+function buildNav(){
+  $('#side-links').innerHTML=groups.map(g=>`<div class="grp"><h3>${g.name}</h3>${g.items.map(p=>
+    `<a href="#${p.dataset.id}" data-id="${p.dataset.id}" class="${read[p.dataset.id]?'read':''}">${p.dataset.title}</a>`).join('')}</div>`).join('');
+  const n=Object.values(read).filter(Boolean).length;
+  $('#progtxt').textContent=`Đã đọc ${n}/${pages.length} trang`;
+  $('#progbar').style.width=(n/pages.length*100)+'%';
+  $$('#side-links a').forEach(a=>a.classList.toggle('on',a.dataset.id===current));
+  applyFilter();
+}
+
+/* pages */
+function show(id){
+  const page=pages.find(p=>p.dataset.id===id)||pages[0];
+  current=page.dataset.id;
+  pages.forEach(p=>p.hidden=(p!==page));
+  if(!$('.crumb',page)){
+    const c=document.createElement('div');c.className='crumb';
+    c.textContent=page.dataset.group+'  ›  '+page.dataset.title;
+    page.prepend(c);
+  }
+  $$('pre',page).forEach(pre=>{
+    if($('.copy',pre))return;
+    const b=document.createElement('button');b.className='copy';b.type='button';b.textContent='Sao chép';
+    b.addEventListener('click',()=>copyCode(pre,b));
+    pre.appendChild(b);
+  });
+  $$('.mark,.pn',page).forEach(e=>e.remove());
+  const m=document.createElement('div');m.className='mark';
+  m.innerHTML=`<button type="button" aria-pressed="${!!read[current]}">${read[current]?'Đã đọc ✓':'Đánh dấu đã đọc'}</button>`;
+  m.firstChild.addEventListener('click',e=>{
+    read[current]=!read[current];saveRead();
+    e.currentTarget.setAttribute('aria-pressed',!!read[current]);
+    e.currentTarget.textContent=read[current]?'Đã đọc ✓':'Đánh dấu đã đọc';
+    buildNav();
+  });
+  page.appendChild(m);
+  const i=pages.indexOf(page),prev=pages[i-1],next=pages[i+1];
+  const pn=document.createElement('div');pn.className='pn';
+  pn.innerHTML=(prev?`<a href="#${prev.dataset.id}"><small>Trước</small>${prev.dataset.title}</a>`:'<span></span>')+
+               (next?`<a href="#${next.dataset.id}"><small>Tiếp theo</small>${next.dataset.title}</a>`:'');
+  page.appendChild(pn);
+
+  document.title=page.dataset.title+' · Kubernetes study notes';
+  buildNav();buildToc(page);
+  window.scrollTo(0,0);
+  closeSide();
+}
+function copyCode(pre,btn){
+  const text=$('code',pre).innerText;
+  const done=()=>{btn.textContent='Đã chép';setTimeout(()=>btn.textContent='Sao chép',1400)};
+  const fallback=()=>{
+    try{const r=document.createRange();r.selectNodeContents($('code',pre));
+      const s=getSelection();s.removeAllRanges();s.addRange(r);document.execCommand('copy');s.removeAllRanges();done();}
+    catch(e){btn.textContent='Không chép được'}
+  };
+  try{navigator.clipboard.writeText(text).then(done,fallback)}catch(e){fallback()}
+}
+
+/* on this page */
+let tocItems=[];
+function buildToc(page){
+  const hs=$$('h2,h3',page);
+  tocItems=hs.map((h,i)=>{h.id=`${current}-h${i}`;return {h,a:null}});
+  $('#toc').innerHTML='<h4>Trong trang này</h4>'+hs.map((h,i)=>`<a href="#" class="${h.tagName==='H3'?'l3':''}" data-i="${i}">${h.textContent}</a>`).join('');
+  $$('#toc a').forEach(a=>{
+    tocItems[+a.dataset.i].a=a;
+    a.addEventListener('click',e=>{e.preventDefault();tocItems[+a.dataset.i].h.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'})});
+  });
+  spy();
+}
+function spy(){
+  if(!tocItems.length)return;
+  let cur=0;
+  tocItems.forEach((t,i)=>{if(t.h.getBoundingClientRect().top<110)cur=i});
+  tocItems.forEach((t,i)=>t.a&&t.a.classList.toggle('on',i===cur));
+}
+addEventListener('scroll',spy,{passive:true});
+
+/* search */
+function applyFilter(){
+  const q=$('#q').value.trim().toLowerCase();
+  let any=false;
+  $$('.grp').forEach(g=>{
+    let vis=false;
+    $$('a',g).forEach(a=>{
+      const i=pages.findIndex(p=>p.dataset.id===a.dataset.id);
+      const hit=!q||index[i].includes(q)||a.textContent.toLowerCase().includes(q);
+      a.style.display=hit?'':'none'; if(hit)vis=true;
+    });
+    g.style.display=vis?'':'none'; if(vis)any=true;
+  });
+  $('#none').style.display=any?'none':'block';
+}
+$('#q').addEventListener('input',()=>{ if(innerWidth<=820)openSide(); applyFilter(); });
+$('#q').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){const a=$$('#side-links a').find(x=>x.style.display!=='none');if(a){location.hash=a.dataset.id;}}
+});
+addEventListener('keydown',e=>{
+  if(e.key==='/'&&!/input|textarea/i.test(document.activeElement.tagName)){e.preventDefault();$('#q').focus()}
+});
+
+/* mobile sidebar */
+function openSide(){$('#side').classList.add('open');$('#scrim').classList.add('open')}
+function closeSide(){$('#side').classList.remove('open');$('#scrim').classList.remove('open')}
+$('#burger').addEventListener('click',()=>$('#side').classList.contains('open')?closeSide():openSide());
+$('#scrim').addEventListener('click',closeSide);
+
+/* theme */
+const root=document.documentElement;
+try{const t=localStorage.getItem('k8s-theme');if(t)root.dataset.theme=t}catch(e){}
+$('#theme').addEventListener('click',()=>{
+  const dark=root.dataset.theme?root.dataset.theme==='dark':matchMedia('(prefers-color-scheme:dark)').matches;
+  root.dataset.theme=dark?'light':'dark';
+  try{localStorage.setItem('k8s-theme',root.dataset.theme)}catch(e){}
+});
+
+/* routing: only a plain #page-id is used in the hash */
+addEventListener('hashchange',()=>show(location.hash.slice(1)));
+show(location.hash.slice(1));
+</script>
+</body>
+</html>
