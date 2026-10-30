@@ -1214,6 +1214,699 @@ crictl ps</code></pre>
 </ul>
 </article>
 
+<!-- ============ PSA ============ -->
+<article class="page" data-id="psa" data-group="Nâng cao: Bảo mật" data-title="PSA, admission và policy" hidden>
+<h1>Pod Security Admission, ValidatingAdmissionPolicy và policy engine</h1>
+<p class="lead">Ba lớp để kiểm soát “Pod nào được phép chạy”: PSA có sẵn trong Kubernetes, ValidatingAdmissionPolicy viết luật bằng CEL, và các policy engine như Kyverno, Gatekeeper cho nhu cầu phức tạp hơn.</p>
+
+<h2>Bối cảnh</h2>
+<ul>
+<li><b>PodSecurityPolicy (PSP)</b> đã bị gỡ ở 1.25.</li>
+<li><b>Pod Security Standards (PSS)</b> là bộ tiêu chuẩn gồm ba profile. <b>Pod Security Admission (PSA)</b> là admission controller built-in để áp dụng PSS lên namespace.</li>
+<li>PSA đơn giản, không cần cài thêm gì, nhưng cứng: chỉ ba mức, áp theo namespace, không sửa (mutate) được Pod.</li>
+</ul>
+
+<h2>Ba profile của PSS</h2>
+<div class="tw"><table>
+<tr><th>Profile</th><th>Ý nghĩa</th><th>Chặn những gì (tiêu biểu)</th></tr>
+<tr><td><code>privileged</code></td><td>Không hạn chế</td><td>Không chặn gì. Dành cho hệ thống như CNI, CSI, agent giám sát.</td></tr>
+<tr><td><code>baseline</code></td><td>Chặn các leo thang đặc quyền đã biết, ít ảnh hưởng ứng dụng</td><td><code>privileged: true</code>, hostNetwork/hostPID/hostIPC, hostPath volume, hostPort, thêm capability nguy hiểm, seccomp <code>Unconfined</code>, sysctl không an toàn.</td></tr>
+<tr><td><code>restricted</code></td><td>Theo best practice hardening hiện hành</td><td>Mọi thứ của baseline, cộng thêm: bắt buộc <code>runAsNonRoot: true</code>, <code>allowPrivilegeEscalation: false</code>, drop <code>ALL</code> capabilities (chỉ được thêm lại <code>NET_BIND_SERVICE</code>), seccomp <code>RuntimeDefault</code> hoặc <code>Localhost</code>, chỉ cho các loại volume an toàn.</td></tr>
+</table></div>
+
+<h2>Ba chế độ (mode)</h2>
+<div class="tw"><table>
+<tr><th>Mode</th><th>Khi vi phạm</th></tr>
+<tr><td><code>enforce</code></td><td>Từ chối tạo Pod.</td></tr>
+<tr><td><code>audit</code></td><td>Cho phép, nhưng ghi annotation vào audit log.</td></tr>
+<tr><td><code>warn</code></td><td>Cho phép, nhưng trả cảnh báo cho người chạy kubectl.</td></tr>
+</table></div>
+<p>Cấu hình bằng label trên namespace, mỗi mode độc lập nhau. Có thể ghim phiên bản của chính sách bằng <code>-version</code> để nâng cấp cluster không làm đổi luật đột ngột.</p>
+<pre><code>kubectl label ns payments \
+  pod-security.kubernetes.io/enforce=baseline \
+  pod-security.kubernetes.io/enforce-version=latest \
+  pod-security.kubernetes.io/warn=restricted \
+  pod-security.kubernetes.io/audit=restricted</code></pre>
+
+<h2>Rollout an toàn vào cluster đang chạy</h2>
+<ol>
+<li>Đặt <code>warn</code> và <code>audit</code> ở mức mong muốn (thường <code>restricted</code>), chưa bật <code>enforce</code>.</li>
+<li>Chạy thử với server-side dry-run để xem namespace nào sẽ bị ảnh hưởng:
+<pre><code>kubectl label --dry-run=server --overwrite ns --all \
+  pod-security.kubernetes.io/enforce=baseline</code></pre></li>
+<li>Sửa workload vi phạm (thêm <code>securityContext</code>), theo dõi cảnh báo.</li>
+<li>Bật <code>enforce</code> từng namespace, trước tiên là các namespace ứng dụng.</li>
+</ol>
+<div class="callout warn"><b>Cẩn thận</b><p>Namespace chạy CNI, CSI, node-exporter hay log agent thường cần <code>privileged</code>. Đừng bật <code>restricted</code> hàng loạt cho <code>kube-system</code>. Nếu cần ngoại lệ, dùng <code>AdmissionConfiguration</code> để exempt theo username, namespace hoặc runtimeClass.</p></div>
+
+<h2>Pod đạt chuẩn restricted</h2>
+<pre><code>apiVersion: v1
+kind: Pod
+metadata:
+  name: safe
+spec:
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: app
+      image: myapp:1.0
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: ["ALL"]}
+        readOnlyRootFilesystem: true</code></pre>
+
+<h2>ValidatingAdmissionPolicy (VAP)</h2>
+<p>Luật validate viết bằng biểu thức <b>CEL</b>, chạy ngay trong API server, không cần webhook ngoài (nhanh hơn, ít điểm lỗi hơn). Ổn định (GA) từ 1.30. Gồm hai object: policy và binding.</p>
+<pre><code>apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: max-replicas
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+  validations:
+    - expression: "object.spec.replicas &lt;= 5"
+      message: "replicas phải &lt;= 5"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: max-replicas-binding
+spec:
+  policyName: max-replicas
+  validationActions: [Deny]        # hoặc Warn, Audit
+  matchResources:
+    namespaceSelector:
+      matchLabels: {env: prod}</code></pre>
+<p>Bản K8s mới còn bổ sung policy dạng mutate. Kiểm tra trạng thái tính năng theo phiên bản bạn dùng.</p>
+
+<h2>Kyverno và OPA Gatekeeper</h2>
+<div class="tw"><table>
+<tr><th>Tiêu chí</th><th>Kyverno</th><th>OPA Gatekeeper</th></tr>
+<tr><td>Ngôn ngữ luật</td><td>YAML (và CEL ở bản mới), gần với K8s</td><td>Rego, qua ConstraintTemplate</td></tr>
+<tr><td>Validate</td><td>Có</td><td>Có</td></tr>
+<tr><td>Mutate</td><td>Có</td><td>Có (Assign/AssignMetadata)</td></tr>
+<tr><td>Generate (tự tạo object)</td><td>Có, ví dụ tự tạo NetworkPolicy cho namespace mới</td><td>Không</td></tr>
+<tr><td>Verify chữ ký image</td><td>Có (<code>verifyImages</code>, cosign)</td><td>Cần thêm công cụ</td></tr>
+<tr><td>Quét tài nguyên đang có</td><td>Background scan, PolicyReport</td><td>Audit</td></tr>
+<tr><td>Đường học</td><td>Thấp</td><td>Cao hơn (phải học Rego), nhưng dùng chung được với OPA ở nơi khác</td></tr>
+</table></div>
+<pre><code>apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-team-label
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: check-team
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: "Pod phải có label team"
+        pattern:
+          metadata:
+            labels:
+              team: "?*"</code></pre>
+<div class="callout"><b>Ghi chú</b><p>Cú pháp của Kyverno thay đổi giữa các phiên bản (ví dụ vị trí của <code>failureAction</code>). Kiểm tra tài liệu đúng phiên bản bạn cài.</p></div>
+
+<h2>Chọn công cụ nào?</h2>
+<ul>
+<li>Chỉ cần chặn pod đặc quyền: <b>PSA</b> là đủ.</li>
+<li>Luật validate đơn giản theo từng object: <b>VAP</b>.</li>
+<li>Cần mutate, generate, verify image, báo cáo tuân thủ: <b>Kyverno</b> hoặc <b>Gatekeeper</b>.</li>
+<li>Các lớp này kết hợp được: PSA làm nền, policy engine bổ sung luật riêng của tổ chức.</li>
+</ul>
+
+<h2>Chuỗi cung ứng và runtime</h2>
+<ul>
+<li>Quét image (Trivy, Grype), ký image (cosign) và kiểm chữ ký lúc admission, dùng digest thay vì tag.</li>
+<li>Runtime: seccomp, AppArmor, SELinux. Giám sát hành vi bằng Falco hoặc Tetragon.</li>
+<li>Cô lập mạnh hơn: <code>RuntimeClass</code> với gVisor hoặc Kata Containers.</li>
+</ul>
+</article>
+
+<!-- ============ HELM ============ -->
+<article class="page" data-id="helm" data-group="Nâng cao: Triển khai" data-title="Helm và Kustomize" hidden>
+<h1>Helm và Kustomize</h1>
+<p class="lead">Quản lý hàng chục manifest YAML bằng tay rất dễ lỗi. Helm đóng gói chúng thành chart có tham số và có vòng đời cài đặt, còn Kustomize vá YAML thuần theo từng môi trường.</p>
+
+<h2>Helm là gì?</h2>
+<ul>
+<li><b>Chart:</b> gói chứa template K8s và giá trị mặc định.</li>
+<li><b>Release:</b> một lần cài chart vào cluster với tên riêng. Cùng một chart cài được nhiều release.</li>
+<li><b>Repository / OCI registry:</b> nơi lưu chart (HTTP repo hoặc OCI như ECR, GHCR, Harbor).</li>
+<li><b>Values:</b> tham số để tùy biến, ghi đè bằng <code>-f values.yaml</code> hoặc <code>--set</code>.</li>
+</ul>
+<div class="callout"><b>Ghi chú</b><p>Helm 3 không còn Tiller. Helm chạy phía client bằng quyền kubeconfig của bạn, lưu trạng thái release dưới dạng Secret (<code>helm.sh/release.v1</code>) trong namespace của release.</p></div>
+
+<h2>Cấu trúc chart</h2>
+<pre><code>mychart/
+  Chart.yaml          # tên, version chart, appVersion, dependencies
+  values.yaml         # giá trị mặc định
+  templates/
+    deployment.yaml
+    service.yaml
+    _helpers.tpl      # hàm dùng chung
+    NOTES.txt         # hướng dẫn in sau khi cài
+  charts/             # chart phụ thuộc
+  values.schema.json  # (tùy chọn) kiểm tra values</code></pre>
+<pre><code># templates/deployment.yaml (rút gọn)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mychart.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    spec:
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          {{- with .Values.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}</code></pre>
+<p>Template dùng Go template cộng thư viện Sprig: <code>.Values</code>, <code>.Release.Name</code>, <code>.Chart</code>, <code>include</code>, <code>toYaml</code>, <code>nindent</code>, <code>default</code>, <code>required</code>.</p>
+
+<h2>Lệnh thường dùng</h2>
+<pre><code>helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo update
+helm search repo nginx
+helm show values bitnami/nginx &gt; values.yaml
+
+helm install web bitnami/nginx -n demo --create-namespace -f values.yaml
+helm upgrade --install web bitnami/nginx -n demo -f values.yaml   # idempotent, hợp CI/CD
+helm list -A
+helm status web -n demo
+helm get values web -n demo
+helm history web -n demo
+helm rollback web 1 -n demo
+helm uninstall web -n demo
+
+helm create mychart            # sinh khung chart
+helm lint mychart
+helm template web ./mychart -f values.yaml     # render YAML, không cài
+helm install web ./mychart --dry-run --debug
+helm package mychart
+helm push mychart-0.1.0.tgz oci://ghcr.io/ORG/charts</code></pre>
+
+<h2>Điều cần nhớ</h2>
+<ul>
+<li><b>Hooks:</b> annotation <code>helm.sh/hook</code> (pre-install, post-upgrade, pre-delete…) chạy Job vào các thời điểm của release, ví dụ migrate database.</li>
+<li><b>Upgrade không cập nhật CRD</b> trong thư mục <code>crds/</code>. CRD chỉ được cài lần đầu. Cần quy trình riêng để nâng cấp CRD.</li>
+<li><b>Rollback</b> quay về revision cũ của release, nhưng không hoàn tác dữ liệu, PVC hay thay đổi ngoài chart.</li>
+<li>Plugin <code>helm-diff</code> cho xem trước thay đổi trước khi upgrade.</li>
+<li>Secret trong values: dùng SOPS (<code>helm-secrets</code>) hoặc External Secrets, không commit plaintext.</li>
+<li>Kiểm tra nguồn chart: chart bên thứ ba có thể cài bất kỳ thứ gì. Xem <code>helm template</code> trước khi cài vào production.</li>
+</ul>
+
+<h2>Kustomize</h2>
+<p>Có sẵn trong kubectl (<code>kubectl apply -k</code>). Không dùng template, thay vào đó giữ YAML thuần ở <code>base</code> và chồng <code>overlays</code> để vá cho từng môi trường.</p>
+<pre><code>app/
+  base/
+    deployment.yaml
+    service.yaml
+    kustomization.yaml
+  overlays/
+    prod/
+      kustomization.yaml
+
+# overlays/prod/kustomization.yaml
+resources:
+  - ../../base
+namePrefix: prod-
+replicas:
+  - name: web
+    count: 5
+images:
+  - name: nginx
+    newTag: "1.28"
+patches:
+  - path: resources-patch.yaml</code></pre>
+<pre><code>kubectl kustomize overlays/prod       # xem kết quả render
+kubectl apply -k overlays/prod</code></pre>
+
+<h2>Helm hay Kustomize?</h2>
+<div class="tw"><table>
+<tr><th></th><th>Helm</th><th>Kustomize</th></tr>
+<tr><td>Cách tùy biến</td><td>Template và values</td><td>Patch trên YAML thuần</td></tr>
+<tr><td>Vòng đời release (rollback, history)</td><td>Có</td><td>Không</td></tr>
+<tr><td>Phân phối cho người khác</td><td>Rất tốt (chart, registry)</td><td>Kém hơn</td></tr>
+<tr><td>Độ dễ đọc</td><td>Template nhiều có thể rối</td><td>YAML thuần, dễ review</td></tr>
+</table></div>
+<p>Cách thực tế: dùng Helm để cài phần mềm bên thứ ba (ingress, cert-manager, Prometheus), dùng Kustomize hoặc Helm tự viết cho app của team. Argo CD và Flux hỗ trợ cả hai.</p>
+</article>
+
+<!-- ============ GITOPS ============ -->
+<article class="page" data-id="gitops" data-group="Nâng cao: Triển khai" data-title="GitOps: Argo CD và Flux" hidden>
+<h1>GitOps với Argo CD và Flux</h1>
+<p class="lead">Git là nguồn sự thật duy nhất của cluster. Một operator chạy trong cluster liên tục kéo cấu hình từ Git về và đưa cluster khớp với nó.</p>
+
+<h2>Nguyên tắc GitOps</h2>
+<ul>
+<li><b>Declarative:</b> trạng thái mong muốn được mô tả bằng manifest, Helm hoặc Kustomize.</li>
+<li><b>Versioned:</b> lưu trong Git, có review, lịch sử và revert.</li>
+<li><b>Pulled:</b> agent trong cluster kéo về (pull), CI không cần quyền truy cập cluster (khác với CI đẩy bằng <code>kubectl apply</code>).</li>
+<li><b>Continuously reconciled:</b> phát hiện và sửa drift. Ai sửa tay trên cluster sẽ bị ghi đè (nếu bật self-heal).</li>
+</ul>
+<div class="callout tip"><b>Mẹo</b><p>Tách repo: <b>repo ứng dụng</b> (code, CI build image) và <b>repo cấu hình</b> (manifest triển khai). CI build xong chỉ cập nhật tag image trong repo cấu hình, GitOps lo phần còn lại.</p></div>
+
+<h2>Argo CD</h2>
+<p>Có giao diện web trực quan, hiển thị cây tài nguyên, health và diff. Object chính:</p>
+<ul>
+<li><b>Application:</b> ánh xạ một nguồn (Git path, Helm chart) tới một đích (cluster, namespace).</li>
+<li><b>AppProject:</b> nhóm Application, giới hạn repo, cluster, namespace và loại resource được phép.</li>
+<li><b>ApplicationSet:</b> sinh nhiều Application từ template (theo danh sách cluster, thư mục Git, PR…).</li>
+</ul>
+<pre><code>apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: web
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ORG/REPO.git
+    targetRevision: main
+    path: apps/web
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  syncPolicy:
+    automated:
+      prune: true        # xóa resource không còn trong Git
+      selfHeal: true     # sửa lại khi có drift
+    syncOptions:
+      - CreateNamespace=true</code></pre>
+<ul>
+<li><b>Sync status:</b> Synced hoặc OutOfSync. <b>Health:</b> Healthy, Progressing, Degraded, Missing.</li>
+<li><b>Sync waves và hooks:</b> điều khiển thứ tự (annotation <code>argocd.argoproj.io/sync-wave</code>, hook PreSync/PostSync).</li>
+<li><b>App of Apps</b> hoặc <b>ApplicationSet</b> để bootstrap cả cluster từ một Application gốc.</li>
+<li>Quản lý được nhiều cluster từ một Argo CD (hub-and-spoke).</li>
+<li>Bộ đôi <b>Argo Rollouts</b> bổ sung canary và blue-green.</li>
+</ul>
+<pre><code>argocd login argocd.example.com
+argocd app list
+argocd app sync web
+argocd app diff web
+argocd app rollback web</code></pre>
+
+<h2>Flux</h2>
+<p>Bộ công cụ GitOps gồm các controller nhỏ, thuần CRD, thiên về CLI và “cắm vào Git”. Không có UI mặc định (có thể dùng thêm công cụ ngoài).</p>
+<div class="tw"><table>
+<tr><th>Controller</th><th>Việc chính</th></tr>
+<tr><td>source-controller</td><td>Lấy nguồn: GitRepository, OCIRepository, HelmRepository, Bucket</td></tr>
+<tr><td>kustomize-controller</td><td>Áp dụng Kustomization (manifest thuần hoặc kustomize)</td></tr>
+<tr><td>helm-controller</td><td>Quản lý HelmRelease</td></tr>
+<tr><td>notification-controller</td><td>Gửi cảnh báo, nhận webhook</td></tr>
+<tr><td>image-reflector / image-automation</td><td>Quét image mới và tự cập nhật tag vào Git</td></tr>
+</table></div>
+<pre><code>apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata: {name: apps, namespace: flux-system}
+spec:
+  interval: 1m
+  url: https://github.com/ORG/REPO
+  ref: {branch: main}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: web, namespace: flux-system}
+spec:
+  interval: 10m
+  path: ./apps/web
+  prune: true
+  sourceRef: {kind: GitRepository, name: apps}
+  targetNamespace: demo</code></pre>
+<pre><code>flux bootstrap github --owner=ORG --repository=fleet --path=clusters/prod
+flux get all
+flux reconcile kustomization web --with-source
+flux logs --follow</code></pre>
+<p><code>flux bootstrap</code> cài Flux vào cluster, tạo repo (nếu cần) và để Flux tự quản lý chính nó từ Git.</p>
+
+<h2>So sánh nhanh</h2>
+<div class="tw"><table>
+<tr><th>Tiêu chí</th><th>Argo CD</th><th>Flux</th></tr>
+<tr><td>Giao diện</td><td>Web UI mạnh, dễ nhìn trạng thái</td><td>CLI và CRD, UI qua công cụ ngoài</td></tr>
+<tr><td>Mô hình</td><td>Một ứng dụng lớn, Application/Project</td><td>Các controller module hóa (GitOps Toolkit)</td></tr>
+<tr><td>Multi-tenancy</td><td>AppProject và RBAC riêng</td><td>Dựa vào RBAC K8s và impersonation</td></tr>
+<tr><td>Helm</td><td>Render bằng helm template rồi apply</td><td>Dùng Helm SDK, quản lý release thật (<code>helm list</code> thấy được)</td></tr>
+<tr><td>Image automation</td><td>Cần Argo CD Image Updater</td><td>Có sẵn trong bộ Flux</td></tr>
+<tr><td>Phù hợp</td><td>Nhiều team cần UI, nhiều cluster</td><td>Platform team thích “mọi thứ là CRD”, tự động hóa sâu</td></tr>
+</table></div>
+
+<h2>Secret trong GitOps</h2>
+<p>Không bao giờ commit Secret plaintext. Ba hướng phổ biến:</p>
+<ul>
+<li><b>SOPS</b> (mã hóa file bằng age, KMS), Flux hỗ trợ giải mã gốc.</li>
+<li><b>Sealed Secrets:</b> mã hóa bằng khóa công khai, chỉ controller trong cluster giải mã được.</li>
+<li><b>External Secrets Operator:</b> Git chỉ chứa tham chiếu, giá trị lấy từ Vault, AWS Secrets Manager, GCP Secret Manager…</li>
+</ul>
+</article>
+
+<!-- ============ CNI ============ -->
+<article class="page" data-id="cni" data-group="Nâng cao: Mạng và lưu trữ" data-title="CNI: VPC CNI, Calico, Cilium" hidden>
+<h1>CNI: AWS VPC CNI, Calico, Cilium và Hubble</h1>
+<p class="lead">CNI quyết định Pod lấy IP từ đâu, đi qua mạng thế nào, và NetworkPolicy được thực thi ra sao. Chọn CNI ảnh hưởng hiệu năng, quan sát và giới hạn của cluster.</p>
+
+<h2>CNI hoạt động thế nào</h2>
+<ul>
+<li>CNI (Container Network Interface) là chuẩn gồm plugin (file thực thi trong <code>/opt/cni/bin</code>) và cấu hình trong <code>/etc/cni/net.d</code>.</li>
+<li>Khi tạo sandbox cho Pod, container runtime gọi plugin với lệnh <b>ADD</b> (cấp IP, tạo veth, cấu hình route). Khi xóa Pod gọi <b>DEL</b>.</li>
+<li>Thường chạy dạng DaemonSet kèm một agent trên mỗi node.</li>
+<li>Chưa cài CNI thì node <code>NotReady</code> và Pod kẹt ở <code>ContainerCreating</code>.</li>
+</ul>
+
+<h2>Ba kiểu mạng Pod</h2>
+<div class="tw"><table>
+<tr><th>Kiểu</th><th>Cách làm</th><th>Ví dụ</th></tr>
+<tr><td>Overlay</td><td>Đóng gói gói tin (VXLAN, Geneve, IP-in-IP) qua mạng node. Dễ triển khai, tốn thêm overhead.</td><td>Flannel VXLAN, Calico VXLAN/IPIP, Cilium tunnel</td></tr>
+<tr><td>Routed / underlay</td><td>Pod IP được route trực tiếp, không đóng gói. Hiệu năng tốt, cần mạng hỗ trợ (BGP hoặc VPC).</td><td>Calico BGP, AWS VPC CNI</td></tr>
+<tr><td>eBPF dataplane</td><td>Xử lý gói tin ở kernel bằng eBPF, có thể thay kube-proxy.</td><td>Cilium, Calico eBPF mode</td></tr>
+</table></div>
+
+<h2>AWS VPC CNI</h2>
+<p>CNI mặc định của EKS. Pod nhận <b>địa chỉ IP thật của VPC</b> (secondary IP gắn trên ENI của node), nên không có overlay.</p>
+<ul>
+<li>Thành phần: DaemonSet <code>aws-node</code> chạy <code>ipamd</code> giữ pool IP sẵn sàng cho node.</li>
+<li><b>Ưu điểm:</b> hiệu năng như mạng VPC, Security Group, VPC Flow Logs và routing của AWS dùng được trực tiếp với Pod, dịch vụ ngoài thấy IP Pod thật.</li>
+<li><b>Nhược điểm:</b> mỗi Pod tốn một IP của subnet nên dễ <b>cạn IP</b>. Số Pod trên mỗi node bị giới hạn bởi loại instance.</li>
+</ul>
+<p>Công thức giới hạn: <code>maxPods = số ENI × (số IPv4 mỗi ENI − 1) + 2</code>. Ví dụ <code>m5.large</code> có 3 ENI, mỗi ENI 10 IP, nên tối đa 3 × 9 + 2 = 29 Pod.</p>
+<div class="tw"><table>
+<tr><th>Tính năng</th><th>Công dụng</th></tr>
+<tr><td>Prefix delegation (<code>ENABLE_PREFIX_DELEGATION</code>)</td><td>Gán cả prefix /28 cho ENI, tăng mạnh số Pod mỗi node.</td></tr>
+<tr><td>Custom networking (<code>ENIConfig</code>)</td><td>Cho Pod dùng subnet và CIDR phụ (ví dụ 100.64.0.0/10), tiết kiệm IP của dải chính.</td></tr>
+<tr><td>Security groups for pods (<code>SecurityGroupPolicy</code>)</td><td>Gán Security Group riêng cho từng nhóm Pod (qua trunk/branch ENI, cần instance hỗ trợ).</td></tr>
+<tr><td>Tham số warm pool (<code>WARM_ENI_TARGET</code>, <code>WARM_IP_TARGET</code>, <code>MINIMUM_IP_TARGET</code>)</td><td>Điều chỉnh lượng IP giữ sẵn: nhiều thì Pod lên nhanh nhưng tốn IP.</td></tr>
+<tr><td>Network policy gốc</td><td>Bản mới của VPC CNI có thể thực thi NetworkPolicy chuẩn bằng eBPF.</td></tr>
+</table></div>
+<pre><code>kubectl -n kube-system get ds aws-node
+kubectl -n kube-system describe ds aws-node | grep -i -E "WARM|PREFIX"
+kubectl -n kube-system set env ds aws-node ENABLE_PREFIX_DELEGATION=true</code></pre>
+
+<h2>Calico</h2>
+<ul>
+<li>Mạnh về <b>routing và policy</b>. Có thể chạy BGP không overlay, hoặc IP-in-IP, VXLAN, hoặc mã hóa bằng WireGuard.</li>
+<li>Dataplane: iptables (phổ biến), nftables, hoặc eBPF.</li>
+<li>Thành phần: <code>calico-node</code> (chạy Felix lo policy và route, BIRD lo BGP), <code>Typha</code> (giảm tải datastore khi cluster lớn), <code>calico-kube-controllers</code>. Cài bằng Tigera operator.</li>
+<li>Ngoài NetworkPolicy chuẩn còn có <code>GlobalNetworkPolicy</code> (áp toàn cluster), thứ tự ưu tiên và tier.</li>
+<li>Có thể dùng <b>chỉ để làm policy</b> trên EKS, chạy cạnh VPC CNI (VPC CNI lo IP, Calico lo policy).</li>
+</ul>
+<pre><code>apiVersion: projectcalico.org/v3
+kind: GlobalNetworkPolicy
+metadata: {name: default-deny-app}
+spec:
+  selector: projectcalico.org/namespace not in {"kube-system", "calico-system"}
+  types: [Ingress, Egress]
+  # nhớ thêm rule cho phép DNS, nếu không Pod sẽ không phân giải được tên</code></pre>
+<pre><code>calicoctl get ippool -o wide
+calicoctl node status       # xem trạng thái BGP peer</code></pre>
+
+<h2>Cilium và Hubble</h2>
+<ul>
+<li>Xây trên <b>eBPF</b>. Có thể thay hoàn toàn kube-proxy (<code>kubeProxyReplacement</code>), cân bằng tải hiệu quả không qua iptables.</li>
+<li>Policy dựa trên <b>identity</b> (label) thay vì IP, và hỗ trợ <b>L7</b> (HTTP method/path, gRPC, DNS/FQDN) qua <code>CiliumNetworkPolicy</code>.</li>
+<li>Tính năng thêm: mã hóa trong suốt (WireGuard hoặc IPsec), Cluster Mesh (nối nhiều cluster), Gateway API, egress gateway, bandwidth manager.</li>
+<li>Yêu cầu kernel Linux đủ mới (nhiều tính năng cần 5.x trở lên). Kiểm tra bảng tương thích trước khi chọn.</li>
+</ul>
+<pre><code>apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: {name: allow-get-health}
+spec:
+  endpointSelector:
+    matchLabels: {app: api}
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {app: frontend}
+      toPorts:
+        - ports: [{port: "8080", protocol: TCP}]
+          rules:
+            http:
+              - method: GET
+                path: "/healthz"</code></pre>
+<h3>Hubble</h3>
+<p>Lớp <b>observability</b> của Cilium: xem luồng mạng giữa các Pod theo thời gian thực, có verdict (FORWARDED, DROPPED) và cả thông tin L7. Rất hữu ích để debug NetworkPolicy.</p>
+<pre><code>cilium install
+cilium status --wait
+cilium hubble enable --ui
+cilium hubble ui                          # mở giao diện service map
+
+hubble observe --namespace demo
+hubble observe --verdict DROPPED -f        # xem gói bị chặn theo thời gian thực
+hubble observe --from-pod demo/frontend --to-pod demo/api</code></pre>
+<p>Hubble xuất metric sang Prometheus và có service map trong UI, cho thấy ai nói chuyện với ai.</p>
+
+<h2>Các CNI khác</h2>
+<ul>
+<li><b>Flannel:</b> đơn giản, VXLAN, không có NetworkPolicy. Hợp với lab và k3s mặc định.</li>
+<li><b>Multus:</b> gắn nhiều interface cho một Pod (viễn thông, workload cần mạng phụ).</li>
+<li><b>Azure CNI, GKE dataplane (dựa trên Cilium):</b> CNI của các cloud khác.</li>
+</ul>
+
+<h2>Chọn CNI nào?</h2>
+<div class="tw"><table>
+<tr><th>Tình huống</th><th>Gợi ý</th></tr>
+<tr><td>EKS, ưu tiên đơn giản và tích hợp AWS</td><td>VPC CNI (bật prefix delegation nếu thiếu IP)</td></tr>
+<tr><td>EKS cần policy nâng cao hoặc observability</td><td>VPC CNI + Calico (policy only), hoặc Cilium thay thế</td></tr>
+<tr><td>On-prem có BGP, cần route trực tiếp</td><td>Calico BGP</td></tr>
+<tr><td>Cần L7 policy, quan sát luồng, thay kube-proxy</td><td>Cilium + Hubble</td></tr>
+<tr><td>Lab, edge nhẹ</td><td>Flannel (k3s mặc định)</td></tr>
+</table></div>
+<div class="callout warn"><b>Cẩn thận</b><p>Đổi CNI trên cluster đang chạy rất rủi ro (Pod mất mạng, phải recreate). Chọn từ đầu và thử nghiệm kỹ. Đặt policy default-deny nhớ cho phép DNS và kube-system.</p></div>
+</article>
+
+<!-- ============ CSI ============ -->
+<article class="page" data-id="csi" data-group="Nâng cao: Mạng và lưu trữ" data-title="CSI: EBS, NetApp Trident" hidden>
+<h1>CSI: kiến trúc, AWS EBS và NetApp Trident</h1>
+<p class="lead">CSI (Container Storage Interface) là chuẩn để hãng storage viết driver chạy ngoài lõi Kubernetes. Mọi storage hiện đại (EBS, Ceph, NetApp, Azure Disk…) đều đi qua CSI.</p>
+
+<h2>Kiến trúc driver</h2>
+<p>Một driver gồm hai phần, giao tiếp qua gRPC với ba dịch vụ <b>Identity</b>, <b>Controller</b>, <b>Node</b>:</p>
+<div class="tw"><table>
+<tr><th>Thành phần</th><th>Chạy dưới dạng</th><th>Việc chính</th></tr>
+<tr><td>Controller plugin</td><td>Deployment (thường 2 bản)</td><td>Tạo, xóa, attach, resize, snapshot volume trên hệ thống storage. Đi kèm các sidecar: <code>external-provisioner</code>, <code>external-attacher</code>, <code>external-resizer</code>, <code>external-snapshotter</code>.</td></tr>
+<tr><td>Node plugin</td><td>DaemonSet</td><td>Trên mỗi node: format, mount volume và bind-mount vào Pod. Đi kèm <code>node-driver-registrar</code> để đăng ký với kubelet.</td></tr>
+</table></div>
+<h3>Luồng cấp phát một volume</h3>
+<ol>
+<li>PVC được tạo. <code>external-provisioner</code> gọi <b>CreateVolume</b> tạo volume trên storage, rồi tạo PV tương ứng.</li>
+<li>Pod được schedule. <code>external-attacher</code> gọi <b>ControllerPublishVolume</b> (attach volume vào node, tạo object <code>VolumeAttachment</code>).</li>
+<li>kubelet gọi <b>NodeStageVolume</b>: format và mount volume vào thư mục staging chung của node.</li>
+<li>kubelet gọi <b>NodePublishVolume</b>: bind-mount vào đường dẫn riêng của Pod.</li>
+</ol>
+<p>Object liên quan: <code>CSIDriver</code>, <code>CSINode</code>, <code>VolumeAttachment</code>, <code>StorageClass</code>, <code>VolumeSnapshotClass</code>, <code>VolumeSnapshot</code>, <code>VolumeSnapshotContent</code>.</p>
+
+<h2>AWS EBS CSI driver</h2>
+<p>Driver <code>ebs.csi.aws.com</code> cấp EBS volume (block storage) cho Pod. Trên EKS cài như một add-on (<code>aws-ebs-csi-driver</code>).</p>
+<ul>
+<li>Volume EBS gắn với <b>một AZ</b> và gần như chỉ <b>RWO</b> (một node tại một thời điểm). Pod phải chạy cùng AZ với volume.</li>
+<li>Vì vậy StorageClass nên dùng <code>volumeBindingMode: WaitForFirstConsumer</code> để volume được tạo ở đúng AZ của Pod.</li>
+<li>Driver cần quyền IAM (tạo, attach, xóa volume): dùng <b>IRSA</b> hoặc <b>EKS Pod Identity</b> cho ServiceAccount của controller.</li>
+<li>Hỗ trợ expand online, snapshot (qua EBS snapshot), mã hóa bằng KMS.</li>
+<li>Cần RWX: dùng <b>EFS CSI</b> (<code>efs.csi.aws.com</code>) hoặc FSx.</li>
+</ul>
+<pre><code>apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: {name: ebs-gp3}
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+  # iops: "6000"          # tùy chọn cho gp3
+  # throughput: "250"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete</code></pre>
+<div class="callout warn"><b>Cẩn thận</b><p>Lỗi hay gặp: <code>Multi-Attach error</code> khi Pod được schedule sang node khác trong lúc volume còn gắn ở node cũ, hoặc Pod Pending vì volume nằm ở AZ không có node trống. Kiểm tra <code>kubectl get volumeattachment</code> và log của <code>ebs-csi-controller</code>.</p></div>
+
+<h2>NetApp Trident</h2>
+<p>Trident là CSI provisioner mã nguồn mở của NetApp (<code>csi.trident.netapp.io</code>), cấp volume từ các hệ thống NetApp: ONTAP on-prem, Cloud Volumes ONTAP, Amazon FSx for NetApp ONTAP, Azure NetApp Files…</p>
+<ul>
+<li>Cài bằng Trident operator hoặc Helm, thường vào namespace <code>trident</code>.</li>
+<li><b>Backend</b> mô tả kết nối tới storage, tạo bằng CRD <code>TridentBackendConfig</code> (TBC) hoặc <code>tridentctl create backend</code>.</li>
+<li><b>Driver</b> ONTAP phổ biến: <code>ontap-nas</code> (NFS, mỗi PVC một FlexVol), <code>ontap-nas-economy</code> (nhiều PVC chung một FlexVol), <code>ontap-nas-flexgroup</code>, <code>ontap-san</code> (iSCSI hoặc NVMe), <code>ontap-san-economy</code>.</li>
+<li>NAS (NFS) cho <b>RWX</b> dễ dàng, SAN (block) cho workload cần hiệu năng như database.</li>
+<li>Có snapshot, <b>clone</b> nhanh từ PVC hoặc snapshot (tận dụng FlexClone), import volume có sẵn, expand.</li>
+</ul>
+<pre><code>apiVersion: v1
+kind: Secret
+metadata: {name: ontap-credentials, namespace: trident}
+type: Opaque
+stringData:
+  username: k8s-admin
+  password: CHANGE_ME
+---
+apiVersion: trident.netapp.io/v1
+kind: TridentBackendConfig
+metadata: {name: ontap-nas-backend, namespace: trident}
+spec:
+  version: 1
+  backendName: ontap-nas
+  storageDriverName: ontap-nas
+  managementLIF: 10.0.0.10
+  dataLIF: 10.0.0.11
+  svm: svm_k8s
+  credentials:
+    name: ontap-credentials
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: {name: trident-nas}
+provisioner: csi.trident.netapp.io
+parameters:
+  backendType: "ontap-nas"
+allowVolumeExpansion: true</code></pre>
+<pre><code>tridentctl -n trident get backend
+tridentctl -n trident get volume
+kubectl get tbc -n trident            # trạng thái backend (Bound hay Failed)</code></pre>
+
+<h2>Snapshot và clone</h2>
+<pre><code>apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata: {name: data-snap}
+spec:
+  volumeSnapshotClassName: csi-snapclass
+  source:
+    persistentVolumeClaimName: data
+---
+# khôi phục: PVC mới từ snapshot
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: data-restore}
+spec:
+  storageClassName: ebs-gp3
+  dataSource:
+    name: data-snap
+    kind: VolumeSnapshot
+    apiGroup: snapshot.storage.k8s.io
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 10Gi}}</code></pre>
+<p>Snapshot CRD và snapshot-controller là thành phần riêng, cần cài trong cluster (EKS add-on hoặc từ kubernetes-csi). Snapshot cùng driver mới khôi phục được cho nhau.</p>
+
+<h2>Các driver khác và cách chọn</h2>
+<div class="tw"><table>
+<tr><th>Nhu cầu</th><th>Lựa chọn</th></tr>
+<tr><td>AWS block, đơn giản</td><td>EBS CSI</td></tr>
+<tr><td>AWS shared file (RWX)</td><td>EFS CSI, FSx</td></tr>
+<tr><td>Enterprise on-prem hoặc FSx ONTAP</td><td>NetApp Trident</td></tr>
+<tr><td>Storage chạy ngay trong cluster</td><td>Rook-Ceph, Longhorn, OpenEBS, Portworx</td></tr>
+<tr><td>VMware, Azure, GCP</td><td>vSphere CSI, Azure Disk/File CSI, GCE PD CSI</td></tr>
+</table></div>
+<div class="callout"><b>Ghi nhớ</b><p>Với database: ưu tiên block storage (RWO) hiệu năng cao và nhớ snapshot, backup. Chọn <code>WaitForFirstConsumer</code>, đặt <code>reclaimPolicy: Retain</code> cho dữ liệu quan trọng để xóa nhầm PVC không mất dữ liệu.</p></div>
+</article>
+
+<!-- ============ PLATFORMS ============ -->
+<article class="page" data-id="platforms" data-group="Nền tảng K8s" data-title="Chém các nền tảng K8s" hidden>
+<h1>Chém gió các nền tảng Kubernetes</h1>
+<p class="lead">Cùng là Kubernetes nhưng cách cài, cách vận hành và nỗi đau mỗi nền tảng rất khác nhau. Trang này tóm tắt đặc điểm và đưa ra nhận xét để chọn đúng công cụ.</p>
+<div class="callout warn"><b>Lưu ý</b><p>Phần “chém” là nhận xét mang tính cá nhân, dựa trên đặc điểm kiến trúc phổ biến. Tên sản phẩm, gói giá và tính năng của các hãng thay đổi nhanh, kiểm tra tài liệu chính thức trước khi quyết định.</p></div>
+
+<h2>Nhìn nhanh</h2>
+<div class="tw"><table>
+<tr><th>Nền tảng</th><th>Ai lo control plane?</th><th>Hợp với</th><th>Nỗi đau chính</th></tr>
+<tr><td>kubeadm</td><td>Bạn</td><td>On-prem, học tập, hiểu sâu từng thành phần</td><td>Tự lo HA, upgrade, cert, backup etcd, CNI, LB, storage</td></tr>
+<tr><td>k3s</td><td>Bạn (nhưng nhẹ, tự động nhiều)</td><td>Edge, IoT, ARM, homelab, cluster CI/dev</td><td>HA cần cấu hình thêm, mặc định “tiện” phải điều chỉnh cho production</td></tr>
+<tr><td>RKE2</td><td>Bạn</td><td>Môi trường cần hardening, tuân thủ</td><td>Nặng hơn k3s, vẫn phải tự lo vận hành</td></tr>
+<tr><td>Rancher (SUSE)</td><td>Tùy cluster downstream</td><td>Quản lý nhiều cluster, nhiều team</td><td>Thêm một lớp cần HA và nâng cấp</td></tr>
+<tr><td>EKS</td><td>AWS</td><td>Đã ở trên AWS, muốn bớt gánh control plane</td><td>Chi phí vụn, IP của VPC CNI, tích hợp IAM phức tạp</td></tr>
+<tr><td>Nutanix (NKP / NKE)</td><td>Bạn qua nền tảng Nutanix</td><td>Đã có hạ tầng Nutanix HCI</td><td>Gắn với hệ sinh thái Nutanix, cộng đồng nhỏ hơn</td></tr>
+</table></div>
+
+<h2>kubeadm: xe số sàn</h2>
+<p>kubeadm là công cụ chính thức để dựng cluster đúng chuẩn upstream. Nó chỉ lo phần bootstrap, không cài CNI, không có load balancer, không có storage.</p>
+<pre><code>kubeadm init --control-plane-endpoint "k8s-api.example.com:6443" --upload-certs
+kubeadm join ... --control-plane --certificate-key ...   # thêm control plane
+kubeadm join ...                                          # thêm worker
+kubeadm certs check-expiration
+kubeadm upgrade plan &amp;&amp; kubeadm upgrade apply v1.xx.y</code></pre>
+<ul>
+<li><b>Học được rất nhiều:</b> bạn thấy cert, static pod, etcd, kubelet config. Hợp để luyện thi CKA.</li>
+<li><b>Đau khi lên production:</b> HA phải tự dựng (HAProxy, kube-vip), certificate hết hạn sau khoảng 1 năm nếu quên gia hạn, upgrade từng minor một, lần lượt control plane rồi worker, và tự backup etcd.</li>
+<li>Nhiều distro và Cluster API dựng trên kubeadm bên dưới.</li>
+</ul>
+
+<h2>k3s: nhẹ, nhanh, tiện</h2>
+<p>Distro Kubernetes đã được CNCF chứng nhận conformant, do Rancher (nay thuộc SUSE) phát triển. Đóng gói thành một binary nhỏ, bỏ bớt các thành phần cũ và alpha.</p>
+<pre><code>curl -sfL https://get.k3s.io | sh -                       # server
+sudo cat /var/lib/rancher/k3s/server/node-token            # lấy token
+curl -sfL https://get.k3s.io | K3S_URL=https://SERVER:6443 K3S_TOKEN=... sh -   # agent
+# HA với etcd nhúng
+curl -sfL https://get.k3s.io | sh -s - server --cluster-init</code></pre>
+<ul>
+<li><b>Datastore:</b> mặc định SQLite (một server), hoặc etcd nhúng cho HA, hoặc DB ngoài (PostgreSQL, MySQL) qua kine.</li>
+<li><b>Kèm sẵn:</b> containerd, Flannel, CoreDNS, Traefik, ServiceLB (klipper-lb), local-path-provisioner, metrics-server.</li>
+<li><b>Chém:</b> cài vài chục giây, chạy ngon trên Raspberry Pi và VM nhỏ, rất hợp edge, lab và cluster tạm cho CI (<code>k3d</code> chạy k3s trong Docker). Đổi lại các mặc định “tiện” (Traefik, ServiceLB, SQLite) thường phải thay hoặc tắt khi lên production, và ServiceLB không phải load balancer thật.</li>
+</ul>
+
+<h2>RKE2: ông anh khó tính của k3s</h2>
+<p>Distro của SUSE Rancher nhắm vào môi trường cần bảo mật và tuân thủ (chính phủ, tài chính).</p>
+<ul>
+<li>Hardening theo CIS Benchmark, hỗ trợ chế độ FIPS 140, SELinux.</li>
+<li>Control plane chạy dạng static pod, runtime là containerd, CNI mặc định thường là Canal (Calico + Flannel), có thể chọn Cilium.</li>
+<li>Cài tương tự k3s nhưng nặng hơn, đổi lại ít phải tự hardening.</li>
+</ul>
+<pre><code>curl -sfL https://get.rke2.io | sh -
+systemctl enable --now rke2-server.service</code></pre>
+
+<h2>Rancher (SUSE): trạm điều khiển đa cluster</h2>
+<p><b>Rancher không phải một distro Kubernetes.</b> Nó là management plane: một ứng dụng chạy trên một cluster (thường RKE2 hoặc k3s, cài bằng Helm) để quản lý nhiều cluster khác.</p>
+<ul>
+<li>Tạo cluster (RKE2, k3s trên VM) hoặc import cluster có sẵn, quản lý luôn EKS, AKS, GKE.</li>
+<li>Đăng nhập tập trung (AD, LDAP, OIDC, SAML), RBAC theo cluster và Project, chính sách chung.</li>
+<li><b>Fleet</b> cho GitOps ở quy mô nhiều cluster. Ngoài ra có các chart giám sát, logging, Longhorn (storage), NeuVector (bảo mật), Harvester (HCI trên bare metal, chạy VM bằng KubeVirt).</li>
+<li><b>Chém:</b> giao diện tốt, rất đáng dùng khi có nhiều cluster và nhiều team. Nhưng đừng coi nó là phép màu: bản thân Rancher server cần HA, backup và upgrade đúng ma trận tương thích. Gói thương mại có tên Rancher Prime.</li>
+</ul>
+
+<h2>EKS: AWS lo control plane</h2>
+<p>AWS vận hành API server và etcd trải trên nhiều AZ. Bạn lo phần data plane và mọi thứ bên trên.</p>
+<ul>
+<li><b>Compute:</b> managed node group, self-managed node, Fargate, Karpenter (autoscale node), hoặc EKS Auto Mode (AWS quản lý cả node và nhiều add-on).</li>
+<li><b>Mạng:</b> VPC CNI mặc định, AWS Load Balancer Controller (ALB cho Ingress, NLB cho Service).</li>
+<li><b>Danh tính:</b> IAM vào cluster qua <i>access entries</i> (cách mới, thay <code>aws-auth</code> ConfigMap), Pod gọi AWS API qua <b>IRSA</b> hoặc <b>EKS Pod Identity</b>.</li>
+<li><b>Add-ons:</b> vpc-cni, coredns, kube-proxy, EBS/EFS CSI quản lý qua EKS add-on.</li>
+<li><b>Upgrade:</b> mỗi lần một minor, lần lượt control plane, add-on, rồi node. Mỗi phiên bản có thời gian hỗ trợ chuẩn và có thể gia hạn có phí (extended support), nên đừng để cluster quá cũ.</li>
+</ul>
+<pre><code>eksctl create cluster --name demo --region ap-southeast-1 --nodes 3
+aws eks update-kubeconfig --name demo --region ap-southeast-1
+kubectl get nodes</code></pre>
+<p><b>Chém:</b> bớt hẳn nỗi đau etcd và control plane, tích hợp sâu với IAM, ALB, EBS. Cái giá: tiền lẻ tẻ (phí cluster theo giờ cộng EC2, NAT gateway, load balancer, data transfer), cạn IP với VPC CNI, và upgrade vẫn là việc của bạn. Dùng Terraform hoặc eksctl chứ đừng click console.</p>
+
+<h2>Nutanix: NKP và NKE</h2>
+<ul>
+<li><b>NKE (Nutanix Kubernetes Engine, tiền thân là Karbon):</b> tích hợp trong Prism Central, tạo cluster K8s trên AHV bằng vài cú click, hợp đội IT đã quen Nutanix.</li>
+<li><b>NKP (Nutanix Kubernetes Platform):</b> nền tảng đa cluster, dựng trên Cluster API, chạy được trên AHV, vSphere, public cloud và bare metal, có thành phần quản lý tập trung và bộ addon quan sát, ingress, GitOps. NKP phát triển từ công nghệ của D2iQ mà Nutanix tiếp nhận.</li>
+<li><b>Storage:</b> Nutanix CSI cấp volume block (Volumes), file (Files, RWX) và object (Objects) từ chính cluster Nutanix.</li>
+<li><b>Chém:</b> hợp nếu doanh nghiệp đã chạy Nutanix HCI và muốn một đầu mối hỗ trợ cho compute, storage và Kubernetes. Không hợp nếu bạn cloud-native thuần, chỉ ở AWS, hoặc muốn tránh lock-in. Cộng đồng và tài liệu cộng đồng nhỏ hơn EKS hay Rancher, nên hỗ trợ từ hãng là phần bạn đang trả tiền.</li>
+</ul>
+
+<h2>Còn các tên khác</h2>
+<ul>
+<li><b>GKE, AKS:</b> tương tự EKS trên Google Cloud và Azure. GKE có Autopilot (Google quản lý cả node).</li>
+<li><b>OpenShift (Red Hat):</b> distro doanh nghiệp đầy đủ, nhiều quy tắc riêng (SCC, Routes, Operators).</li>
+<li><b>Cluster API (CAPI):</b> không phải distro mà là cách khai báo vòng đời cluster bằng chính K8s. Nhiều nền tảng (kể cả NKP) dùng nó bên dưới.</li>
+</ul>
+
+<h2>Chọn nhanh</h2>
+<div class="tw"><table>
+<tr><th>Hoàn cảnh</th><th>Chọn</th></tr>
+<tr><td>Học, luyện CKA</td><td>kubeadm, hoặc kind và minikube cho nhanh</td></tr>
+<tr><td>Raspberry Pi, edge, homelab, CI</td><td>k3s</td></tr>
+<tr><td>On-prem, yêu cầu bảo mật và tuân thủ</td><td>RKE2 (kèm Rancher nếu nhiều cluster)</td></tr>
+<tr><td>Nhiều cluster, nhiều team, nhiều môi trường</td><td>Rancher, hoặc Cluster API với GitOps</td></tr>
+<tr><td>Đang ở AWS, ít nhân sự platform</td><td>EKS (cân nhắc Auto Mode hoặc Karpenter)</td></tr>
+<tr><td>Hạ tầng sẵn có là Nutanix</td><td>NKE hoặc NKP</td></tr>
+</table></div>
+<div class="callout tip"><b>Mẹo</b><p>Dù chọn nền tảng nào, kiến thức cốt lõi (Pod, Service, RBAC, storage, mạng) là như nhau. Điều khác biệt là ai chịu trách nhiệm upgrade, backup etcd, và chi phí vận hành. Hãy chọn theo năng lực của đội chứ không theo độ “hot” của công cụ.</p></div>
+</article>
+
     <footer>
       <p style="margin:0 0 8px"><b style="color:var(--ink)">Soạn bởi TracViet</b> (<a href="https://github.com/TracVietHustCS" target="_blank" rel="noopener">@TracVietHustCS</a>) · <a href="https://github.com/TracVietHustCS/k8s-study-notes" target="_blank" rel="noopener">Mã nguồn trên GitHub</a></p>
       Ghi chú cá nhân để tự học, có thể thiếu hoặc lỗi thời. Tham khảo bản chính thức tại <a href="https://kubernetes.io/docs/">kubernetes.io/docs</a>.
